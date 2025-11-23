@@ -9,6 +9,8 @@ https://creativecommons.org/licenses/by/4.0/legalcode.  All source files in this
 repository are released under the Apache 2.0 license, the text of which can be
 found in the LICENSE file.
 
+master algorithim based on SEO quite frequent
+
 ---
 
 Because the repo is large, we recommend you download only the subdirectory of
