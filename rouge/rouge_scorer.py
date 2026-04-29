@@ -196,9 +196,12 @@ def _score_lcs(target_tokens, prediction_tokens):
   if not target_tokens or not prediction_tokens:
     return scoring.Score(precision=0, recall=0, fmeasure=0)
 
-  # Compute length of LCS from the bottom up in a table (DP appproach).
-  lcs_table = _lcs_table(target_tokens, prediction_tokens)
-  lcs_length = lcs_table[-1][-1]
+  # If there is no overlap, LCS length is 0.
+  if not set(target_tokens) & set(prediction_tokens):
+    return scoring.Score(precision=0, recall=0, fmeasure=0)
+
+  # Compute length of LCS from the bottom up in a table (DP approach).
+  lcs_length = _lcs_length(target_tokens, prediction_tokens)
 
   precision = lcs_length / len(prediction_tokens)
   recall = lcs_length / len(target_tokens)
@@ -212,13 +215,38 @@ def _lcs_table(ref, can):
   rows = len(ref)
   cols = len(can)
   lcs_table = [[0] * (cols + 1) for _ in range(rows + 1)]
-  for i in range(1, rows + 1):
-    for j in range(1, cols + 1):
-      if ref[i - 1] == can[j - 1]:
-        lcs_table[i][j] = lcs_table[i - 1][j - 1] + 1
+  for i, ref_i in enumerate(ref):
+    row_i = lcs_table[i + 1]
+    row_prev = lcs_table[i]
+    for j, can_j in enumerate(can):
+      if ref_i == can_j:
+        row_i[j + 1] = row_prev[j] + 1
       else:
-        lcs_table[i][j] = max(lcs_table[i - 1][j], lcs_table[i][j - 1])
+        v1 = row_prev[j + 1]
+        v2 = row_i[j]
+        row_i[j + 1] = v1 if v1 > v2 else v2
   return lcs_table
+
+
+def _lcs_length(ref, can):
+  """Computes LCS length in O(min(M, N)) space."""
+  if len(ref) < len(can):
+    ref, can = can, ref
+  if not can:
+    return 0
+
+  prev = [0] * (len(can) + 1)
+  curr = [0] * (len(can) + 1)
+  for ref_i in ref:
+    for j, can_j in enumerate(can):
+      if ref_i == can_j:
+        curr[j + 1] = prev[j] + 1
+      else:
+        v1 = prev[j + 1]
+        v2 = curr[j]
+        curr[j + 1] = v1 if v1 > v2 else v2
+    prev, curr = curr, prev
+  return prev[-1]
 
 
 def _backtrack_norec(t, ref, can):
@@ -228,13 +256,14 @@ def _backtrack_norec(t, ref, can):
   lcs = []
   while i > 0 and j > 0:
     if ref[i - 1] == can[j - 1]:
-      lcs.insert(0, i-1)
+      lcs.append(i - 1)
       i -= 1
       j -= 1
     elif t[i][j - 1] > t[i - 1][j]:
       j -= 1
     else:
       i -= 1
+  lcs.reverse()
   return lcs
 
 
@@ -305,6 +334,10 @@ def _find_union(lcs_list):
 
 def lcs_ind(ref, can):
   """Returns one of the longest lcs."""
+  if not ref or not can:
+    return []
+  if not set(ref) & set(can):
+    return []
   t = _lcs_table(ref, can)
   return _backtrack_norec(t, ref, can)
 
