@@ -196,9 +196,12 @@ def _score_lcs(target_tokens, prediction_tokens):
   if not target_tokens or not prediction_tokens:
     return scoring.Score(precision=0, recall=0, fmeasure=0)
 
-  # Compute length of LCS from the bottom up in a table (DP appproach).
-  lcs_table = _lcs_table(target_tokens, prediction_tokens)
-  lcs_length = lcs_table[-1][-1]
+  # Optimization: If tokens are disjoint, LCS length is 0.
+  if set(target_tokens).isdisjoint(prediction_tokens):
+    return scoring.Score(precision=0, recall=0, fmeasure=0)
+
+  # Compute length of LCS from the bottom up (DP appproach).
+  lcs_length = _lcs_length(target_tokens, prediction_tokens)
 
   precision = lcs_length / len(prediction_tokens)
   recall = lcs_length / len(target_tokens)
@@ -207,17 +210,48 @@ def _score_lcs(target_tokens, prediction_tokens):
   return scoring.Score(precision=precision, recall=recall, fmeasure=fmeasure)
 
 
+def _lcs_length(ref, can):
+  """Computes the length of the LCS between ref and can."""
+  rows = len(ref)
+  cols = len(can)
+  if rows < cols:
+    ref, can = can, ref
+    rows, cols = cols, rows
+
+  # Use O(min(M, N)) space for LCS length calculation.
+  prev_row = [0] * (cols + 1)
+  curr_row = [0] * (cols + 1)
+
+  for i in range(1, rows + 1):
+    ref_i = ref[i - 1]
+    for j in range(1, cols + 1):
+      if ref_i == can[j - 1]:
+        curr_row[j] = prev_row[j - 1] + 1
+      else:
+        v1 = curr_row[j - 1]
+        v2 = prev_row[j]
+        curr_row[j] = v1 if v1 >= v2 else v2
+    prev_row, curr_row = curr_row, prev_row
+
+  return prev_row[cols]
+
+
 def _lcs_table(ref, can):
   """Create 2-d LCS score table."""
   rows = len(ref)
   cols = len(can)
   lcs_table = [[0] * (cols + 1) for _ in range(rows + 1)]
   for i in range(1, rows + 1):
+    ref_i = ref[i - 1]
+    curr_row = lcs_table[i]
+    prev_row = lcs_table[i - 1]
     for j in range(1, cols + 1):
-      if ref[i - 1] == can[j - 1]:
-        lcs_table[i][j] = lcs_table[i - 1][j - 1] + 1
+      if ref_i == can[j - 1]:
+        curr_row[j] = prev_row[j - 1] + 1
       else:
-        lcs_table[i][j] = max(lcs_table[i - 1][j], lcs_table[i][j - 1])
+        v1 = curr_row[j - 1]
+        v2 = prev_row[j]
+        curr_row[j] = v1 if v1 >= v2 else v2
   return lcs_table
 
 
@@ -228,13 +262,14 @@ def _backtrack_norec(t, ref, can):
   lcs = []
   while i > 0 and j > 0:
     if ref[i - 1] == can[j - 1]:
-      lcs.insert(0, i-1)
+      lcs.append(i - 1)
       i -= 1
       j -= 1
     elif t[i][j - 1] > t[i - 1][j]:
       j -= 1
     else:
       i -= 1
+  lcs.reverse()
   return lcs
 
 
@@ -262,12 +297,22 @@ def _summary_level_lcs(ref_sent, can_sent):
   for s in ref_sent:
     # s is a list of tokens
     token_cnts_r.update(s)
+
+  # Pre-calculate token sets for candidate summary to skip disjoint sentences.
+  can_tokens_union = set()
   for s in can_sent:
     token_cnts_c.update(s)
+    can_tokens_union.update(s)
+
+  # Pre-calculate token sets for each candidate sentence.
+  can_sent_sets = [set(s) for s in can_sent]
 
   hits = 0
   for r in ref_sent:
-    lcs = _union_lcs(r, can_sent)
+    if not can_tokens_union.isdisjoint(r):
+      lcs = _union_lcs(r, can_sent, can_sent_sets)
+    else:
+      lcs = []
     # Prevent double-counting:
     # The paper describes just computing hits += len(_union_lcs()),
     # but the implementation prevents double counting. We also
@@ -284,17 +329,25 @@ def _summary_level_lcs(ref_sent, can_sent):
   return scoring.Score(precision=precision, recall=recall, fmeasure=fmeasure)
 
 
-def _union_lcs(ref, c_list):
+def _union_lcs(ref, c_list, c_sets=None):
   """Find union LCS between a ref sentence and list of candidate sentences.
 
   Args:
     ref: list of tokens
-    c_list: list of list of indices for LCS into reference summary
+    c_list: list of candidate sentences
+    c_sets: list of token sets for each candidate sentence
 
   Returns:
     List of tokens in ref representing union LCS.
   """
-  lcs_list = [lcs_ind(ref, c) for c in c_list]
+  if c_sets is None:
+    c_sets = [set(c) for c in c_list]
+
+  ref_set = set(ref)
+  lcs_list = [
+      lcs_ind(ref, c, ref_set=ref_set, can_set=cs)
+      for c, cs in zip(c_list, c_sets)
+  ]
   return [ref[i] for i in _find_union(lcs_list)]
 
 
@@ -303,8 +356,16 @@ def _find_union(lcs_list):
   return sorted(list(set().union(*lcs_list)))
 
 
-def lcs_ind(ref, can):
+def lcs_ind(ref, can, ref_set=None, can_set=None):
   """Returns one of the longest lcs."""
+  if not ref or not can:
+    return []
+  if ref_set is None:
+    ref_set = set(ref)
+  if can_set is None:
+    can_set = set(can)
+  if ref_set.isdisjoint(can_set):
+    return []
   t = _lcs_table(ref, can)
   return _backtrack_norec(t, ref, can)
 
