@@ -196,9 +196,12 @@ def _score_lcs(target_tokens, prediction_tokens):
   if not target_tokens or not prediction_tokens:
     return scoring.Score(precision=0, recall=0, fmeasure=0)
 
+  # Fast path: if no common tokens, LCS length is 0.
+  if not set(target_tokens) & set(prediction_tokens):
+    return scoring.Score(precision=0, recall=0, fmeasure=0)
+
   # Compute length of LCS from the bottom up in a table (DP appproach).
-  lcs_table = _lcs_table(target_tokens, prediction_tokens)
-  lcs_length = lcs_table[-1][-1]
+  lcs_length = _lcs_length(target_tokens, prediction_tokens)
 
   precision = lcs_length / len(prediction_tokens)
   recall = lcs_length / len(target_tokens)
@@ -213,12 +216,43 @@ def _lcs_table(ref, can):
   cols = len(can)
   lcs_table = [[0] * (cols + 1) for _ in range(rows + 1)]
   for i in range(1, rows + 1):
+    ref_i = ref[i - 1]
+    row_i = lcs_table[i]
+    row_prev = lcs_table[i - 1]
     for j in range(1, cols + 1):
-      if ref[i - 1] == can[j - 1]:
-        lcs_table[i][j] = lcs_table[i - 1][j - 1] + 1
+      if ref_i == can[j - 1]:
+        row_i[j] = row_prev[j - 1] + 1
       else:
-        lcs_table[i][j] = max(lcs_table[i - 1][j], lcs_table[i][j - 1])
+        v1 = row_prev[j]
+        v2 = row_i[j - 1]
+        row_i[j] = v1 if v1 >= v2 else v2
   return lcs_table
+
+
+def _lcs_length(ref, can):
+  """Compute LCS length efficiently."""
+  if len(ref) < len(can):
+    ref, can = can, ref
+
+  rows = len(ref)
+  cols = len(can)
+  # prev_row[j] is lcs_table[i-1][j]
+  # curr_row[j] is lcs_table[i][j]
+  prev_row = [0] * (cols + 1)
+  curr_row = [0] * (cols + 1)
+
+  for i in range(1, rows + 1):
+    ref_i = ref[i - 1]
+    for j in range(1, cols + 1):
+      if ref_i == can[j - 1]:
+        curr_row[j] = prev_row[j - 1] + 1
+      else:
+        v1 = prev_row[j]
+        v2 = curr_row[j - 1]
+        curr_row[j] = v1 if v1 >= v2 else v2
+    prev_row, curr_row = curr_row, prev_row
+
+  return prev_row[cols]
 
 
 def _backtrack_norec(t, ref, can):
@@ -228,13 +262,14 @@ def _backtrack_norec(t, ref, can):
   lcs = []
   while i > 0 and j > 0:
     if ref[i - 1] == can[j - 1]:
-      lcs.insert(0, i-1)
+      lcs.append(i - 1)
       i -= 1
       j -= 1
     elif t[i][j - 1] > t[i - 1][j]:
       j -= 1
     else:
       i -= 1
+  lcs.reverse()
   return lcs
 
 
@@ -265,18 +300,26 @@ def _summary_level_lcs(ref_sent, can_sent):
   for s in can_sent:
     token_cnts_c.update(s)
 
+  can_sets = [set(s) for s in can_sent]
+
   hits = 0
   for r in ref_sent:
-    lcs = _union_lcs(r, can_sent)
-    # Prevent double-counting:
-    # The paper describes just computing hits += len(_union_lcs()),
-    # but the implementation prevents double counting. We also
-    # implement this as in version 1.5.5.
-    for t in lcs:
-      if token_cnts_c[t] > 0 and token_cnts_r[t] > 0:
-        hits += 1
-        token_cnts_c[t] -= 1
-        token_cnts_r[t] -= 1
+    r_set = set(r)
+    # Only keep candidate sentences that share at least one token with r.
+    reduced_can_sent = [
+        can_sent[i] for i, s_set in enumerate(can_sets) if r_set & s_set
+    ]
+    if reduced_can_sent:
+      lcs = _union_lcs(r, reduced_can_sent)
+      # Prevent double-counting:
+      # The paper describes just computing hits += len(_union_lcs()),
+      # but the implementation prevents double counting. We also
+      # implement this as in version 1.5.5.
+      for t in lcs:
+        if token_cnts_c[t] > 0 and token_cnts_r[t] > 0:
+          hits += 1
+          token_cnts_c[t] -= 1
+          token_cnts_r[t] -= 1
 
   recall = hits / m
   precision = hits / n
@@ -289,7 +332,7 @@ def _union_lcs(ref, c_list):
 
   Args:
     ref: list of tokens
-    c_list: list of list of indices for LCS into reference summary
+    c_list: list of list of candidate sentences
 
   Returns:
     List of tokens in ref representing union LCS.
