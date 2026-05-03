@@ -215,10 +215,14 @@ def _lcs_table(ref, can):
   rows = len(ref)
   cols = len(can)
   lcs_table = [[0] * (cols + 1) for _ in range(rows + 1)]
+  can_set = set(can)
   for i in range(1, rows + 1):
     ref_i = ref[i - 1]
     row_i = lcs_table[i]
     row_prev = lcs_table[i - 1]
+    if ref_i not in can_set:
+      lcs_table[i] = row_prev
+      continue
     for j in range(1, cols + 1):
       if ref_i == can[j - 1]:
         row_i[j] = row_prev[j - 1] + 1
@@ -240,9 +244,12 @@ def _lcs_length(ref, can):
   # curr_row[j] is lcs_table[i][j]
   prev_row = [0] * (cols + 1)
   curr_row = [0] * (cols + 1)
+  can_set = set(can)
 
   for i in range(1, rows + 1):
     ref_i = ref[i - 1]
+    if ref_i not in can_set:
+      continue
     for j in range(1, cols + 1):
       if ref_i == can[j - 1]:
         curr_row[j] = prev_row[j - 1] + 1
