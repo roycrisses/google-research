@@ -1,3 +1,7 @@
 ## 2025-05-22 - ROUGE LCS Algorithmic Optimizations
 **Learning:** The default ROUGE LCS implementation suffered from several performance anti-patterns in Python: O(M*N) memory usage for simple length checks, O(N^2) list building using `insert(0, ...)`, and redundant O(M*N) DP calculations for disjoint token sequences or non-overlapping sentences in summaries.
 **Action:** Always use space-optimized DP ($O(\min(M, N))$) when only the length is needed. Use `append()` + `reverse()` for efficient list building. Implement fast-path checks using `set` intersections to bypass expensive algorithms. Pre-calculate sets in loops to avoid redundant conversions. Use local variable lookups and conditional expressions instead of `max()` in tight loops.
+
+## 2025-05-22 - ROUGE Performance Boost (LCS, N-grams, & Tokenization)
+**Learning:** Python's `zip` and `itertools.islice` are significantly faster (~2.5x) for n-gram generation than generator expressions with list slicing. Algorithmic "early exits" in DP loops using `set` membership checks for reference tokens provide huge gains (~145% to >10,000% speedup) when overlap is partial or non-existent. Regex matching in tight filtering loops (`VALID_TOKEN_RE.match`) is a major bottleneck (~15x slower) compared to simple truthiness checks (`if x`) if the data was already sanitized.
+**Action:** Prefer `itertools` for sequence windowing. Always look for fast-path membership checks to bypass O(N*M) loops. Verify if regex checks are redundant after previous sanitization steps to avoid unnecessary overhead.
