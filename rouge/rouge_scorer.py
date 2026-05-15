@@ -35,6 +35,7 @@ from __future__ import division
 from __future__ import print_function
 
 import collections
+import itertools
 import re
 
 from absl import logging
@@ -43,6 +44,7 @@ import numpy as np
 import six
 from six.moves import map
 from six.moves import range
+from six.moves import zip
 from rouge_score import scoring
 from rouge_score import tokenizers
 
@@ -177,10 +179,8 @@ def _create_ngrams(tokens, n):
     A dictionary mapping each bigram to the number of occurrences.
   """
 
-  ngrams = collections.Counter()
-  for ngram in (tuple(tokens[i:i + n]) for i in range(len(tokens) - n + 1)):
-    ngrams[ngram] += 1
-  return ngrams
+  return collections.Counter(
+      zip(*(itertools.islice(tokens, i, None) for i in range(n))))
 
 
 def _score_lcs(target_tokens, prediction_tokens):
@@ -234,25 +234,26 @@ def _lcs_length(ref, can):
   if len(ref) < len(can):
     ref, can = can, ref
 
-  rows = len(ref)
   cols = len(can)
-  # prev_row[j] is lcs_table[i-1][j]
-  # curr_row[j] is lcs_table[i][j]
-  prev_row = [0] * (cols + 1)
-  curr_row = [0] * (cols + 1)
+  # dp[j] is the LCS length between ref[:i] and can[:j]
+  dp = [0] * (cols + 1)
+  can_set = set(can)
 
-  for i in range(1, rows + 1):
-    ref_i = ref[i - 1]
-    for j in range(1, cols + 1):
-      if ref_i == can[j - 1]:
-        curr_row[j] = prev_row[j - 1] + 1
+  for ref_i in ref:
+    if ref_i not in can_set:
+      continue
+    prev = 0
+    for j, can_j in enumerate(can, 1):
+      temp = dp[j]
+      if ref_i == can_j:
+        dp[j] = prev + 1
       else:
-        v1 = prev_row[j]
-        v2 = curr_row[j - 1]
-        curr_row[j] = v1 if v1 >= v2 else v2
-    prev_row, curr_row = curr_row, prev_row
+        # dp[j] is v1 (row_prev[j]), dp[j-1] is v2 (row_i[j-1])
+        if dp[j - 1] > dp[j]:
+          dp[j] = dp[j - 1]
+      prev = temp
 
-  return prev_row[cols]
+  return dp[cols]
 
 
 def _backtrack_norec(t, ref, can):
