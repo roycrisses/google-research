@@ -79,22 +79,20 @@ def nonnegative_softmax_kernel_feature_creator(data,
     # We have e^{qk^T/sqrt{d}} = e^{q_norm k_norm^T}, where
     # w_norm = w * data_normalizer for w in {q,k}.
     data_normalizer = 1.0 / (jnp.sqrt(jnp.sqrt(data.shape[-1])))
-  else:
-    data_normalizer = 1.0
-  ratio = 1.0 / jnp.sqrt(projection_matrix.shape[0])
-  data_mod_shape = data.shape[0:len(batch_dims_t)] + projection_matrix.shape
-  data_thick_random_matrix = jnp.zeros(data_mod_shape) + projection_matrix
+    data = data * data_normalizer
 
+  ratio = 1.0 / jnp.sqrt(projection_matrix.shape[0])
+
+  # Optimized dot_general using broadcasting instead of thickening.
   data_dash = lax.dot_general(
-      data_normalizer * data,
-      data_thick_random_matrix,
-      (((data.ndim - 1,), (data_thick_random_matrix.ndim - 1,)),
-       (batch_dims_t, batch_dims_t)),
+      data,
+      projection_matrix,
+      (((data.ndim - 1,), (1,)), ((), ())),
       precision=precision)
 
   diag_data = jnp.square(data)
   diag_data = jnp.sum(diag_data, axis=data.ndim - 1)
-  diag_data = (diag_data / 2.0) * data_normalizer * data_normalizer
+  diag_data = diag_data / 2.0
   diag_data = jnp.expand_dims(diag_data, axis=data.ndim - 1)
 
   last_dims_t = (len(data_dash.shape) - 1,)
@@ -135,17 +133,15 @@ def sincos_softmax_kernel_feature_creator(data,
     # We have: exp(qk^T/sqrt{d}) = exp(|q|^2/2sqrt{d}) * exp(|k|^2/2sqrt{d}) *
     # exp(-(|q*c-k*c|^2)/2), where c = 1.0 / sqrt{sqrt{d}}.
     data_normalizer = 1.0 / (jnp.sqrt(jnp.sqrt(data.shape[-1])))
-  else:
-    data_normalizer = 1.0
-  ratio = 1.0 / jnp.sqrt(projection_matrix.shape[0])
-  data_mod_shape = data.shape[0:len(batch_dims_t)] + projection_matrix.shape
-  data_thick_random_matrix = jnp.zeros(data_mod_shape) + projection_matrix
+    data = data * data_normalizer
 
+  ratio = 1.0 / jnp.sqrt(projection_matrix.shape[0])
+
+  # Optimized dot_general using broadcasting instead of thickening.
   data_dash = lax.dot_general(
-      data_normalizer * data,
-      data_thick_random_matrix,
-      (((data.ndim - 1,), (data_thick_random_matrix.ndim - 1,)),
-       (batch_dims_t, batch_dims_t)),
+      data,
+      projection_matrix,
+      (((data.ndim - 1,), (1,)), ((), ())),
       precision=precision)
   data_dash_cos = ratio * jnp.cos(data_dash)
   data_dash_sin = ratio * jnp.sin(data_dash)
@@ -154,7 +150,7 @@ def sincos_softmax_kernel_feature_creator(data,
   # Constructing D_data and data^{'}
   diag_data = jnp.square(data)
   diag_data = jnp.sum(diag_data, axis=data.ndim - 1)
-  diag_data = (diag_data / 2.0) * data_normalizer * data_normalizer
+  diag_data = diag_data / 2.0
   diag_data = jnp.expand_dims(diag_data, axis=data.ndim - 1)
   # Additional renormalization for numerical stability
   data_renormalizer = jnp.max(diag_data, attention_dims_t, keepdims=True)
@@ -185,18 +181,16 @@ def generalized_kernel_feature_creator(data, projection_matrix, batch_dims_t,
   """
   if normalize_data:
     data_normalizer = 1.0 / (jnp.sqrt(jnp.sqrt(data.shape[-1])))
-  else:
-    data_normalizer = 1.0
+    data = data * data_normalizer
+
   if projection_matrix is None:
-    return kernel_fn(data_normalizer * data) + kernel_epsilon
+    return kernel_fn(data) + kernel_epsilon
   else:
-    data_mod_shape = data.shape[0:len(batch_dims_t)] + projection_matrix.shape
-    data_thick_random_matrix = jnp.zeros(data_mod_shape) + projection_matrix
+    # Optimized dot_general using broadcasting instead of thickening.
     data_dash = lax.dot_general(
-        data_normalizer * data,
-        data_thick_random_matrix,
-        (((data.ndim - 1,), (data_thick_random_matrix.ndim - 1,)),
-         (batch_dims_t, batch_dims_t)),
+        data,
+        projection_matrix,
+        (((data.ndim - 1,), (1,)), ((), ())),
         precision=precision)
   data_prime = kernel_fn(data_dash) + kernel_epsilon
   return data_prime
@@ -598,8 +592,6 @@ class FastAttentionviaLowRankDecomposition(FastAttention):
     batch_dims = tuple(onp.delete(range(n), axis + (n - 1,)))
     # q & k -> (bs, <non-attention dims>, num_heads, <attention dims>, channels)
     qk_perm = batch_dims + axis + (n - 1,)
-    k_extra_perm = axis + batch_dims + (n - 1,)
-    key_extra = key.transpose(k_extra_perm)
     key = key.transpose(qk_perm)
     query = query.transpose(qk_perm)
     # v -> (bs, <non-attention dims>, num_heads, <attention dims>, channels)
@@ -638,9 +630,6 @@ class FastAttentionviaLowRankDecomposition(FastAttention):
         return result
       else:
         # Unidirectional, normalized attention.
-        thick_all_ones = jnp.zeros(key.shape[0:-1]) + jnp.ones(
-            key_extra.shape[0:len(axis)])
-
         index = attention_dims_t[0]
         t_slice_shape = key_prime.shape[0:len(batch_dims_t)] + (
             key_prime.shape[-1],)
@@ -678,20 +667,9 @@ class FastAttentionviaLowRankDecomposition(FastAttention):
         return result
       else:
         # Bidirectional, normalized attention.
-        thick_all_ones = jnp.zeros(key.shape[0:-1]) + jnp.ones(
-            key_extra.shape[0:len(axis)])
-        contract_key = tuple(
-            range(len(batch_dims),
-                  len(batch_dims) + len(axis)))
-        contract_thick_all_ones = tuple(
-            range(thick_all_ones.ndim - len(axis), thick_all_ones.ndim))
         # Construct T = (K^{'})^{T} 1_L
         # k (bs, <non-attention dims>, num_heads, <attention dims>, channels)
-        T = lax.dot_general(
-            key_prime,
-            thick_all_ones, ((contract_key, contract_thick_all_ones),
-                             (batch_dims_t, batch_dims_t)),
-            precision=precision)
+        T = jnp.sum(key_prime, axis=attention_dims_t)
 
         # Construct partition function: R = Q^{'} T = Q^{'}(K^{'})^{T} 1_L
         # q_p (bs, <non-attention dims>, num_heads, <attention dims>, channs_m)
@@ -699,8 +677,7 @@ class FastAttentionviaLowRankDecomposition(FastAttention):
         R = lax.dot_general(
             query_prime,
             T, (((query_prime.ndim - 1,), (T.ndim - 1,)),
-                (batch_dims_t, range(0,
-                                     len(T.shape) - 1))),
+                (batch_dims_t, batch_dims_t)),
             precision=precision)
 
     R = R + 2 * self.numerical_stabilizer * (
