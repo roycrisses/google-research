@@ -82,14 +82,11 @@ def nonnegative_softmax_kernel_feature_creator(data,
   else:
     data_normalizer = 1.0
   ratio = 1.0 / jnp.sqrt(projection_matrix.shape[0])
-  data_mod_shape = data.shape[0:len(batch_dims_t)] + projection_matrix.shape
-  data_thick_random_matrix = jnp.zeros(data_mod_shape) + projection_matrix
 
   data_dash = lax.dot_general(
       data_normalizer * data,
-      data_thick_random_matrix,
-      (((data.ndim - 1,), (data_thick_random_matrix.ndim - 1,)),
-       (batch_dims_t, batch_dims_t)),
+      projection_matrix,
+      (((data.ndim - 1,), (1,)), ((), ())),
       precision=precision)
 
   diag_data = jnp.square(data)
@@ -138,14 +135,11 @@ def sincos_softmax_kernel_feature_creator(data,
   else:
     data_normalizer = 1.0
   ratio = 1.0 / jnp.sqrt(projection_matrix.shape[0])
-  data_mod_shape = data.shape[0:len(batch_dims_t)] + projection_matrix.shape
-  data_thick_random_matrix = jnp.zeros(data_mod_shape) + projection_matrix
 
   data_dash = lax.dot_general(
       data_normalizer * data,
-      data_thick_random_matrix,
-      (((data.ndim - 1,), (data_thick_random_matrix.ndim - 1,)),
-       (batch_dims_t, batch_dims_t)),
+      projection_matrix,
+      (((data.ndim - 1,), (1,)), ((), ())),
       precision=precision)
   data_dash_cos = ratio * jnp.cos(data_dash)
   data_dash_sin = ratio * jnp.sin(data_dash)
@@ -190,13 +184,10 @@ def generalized_kernel_feature_creator(data, projection_matrix, batch_dims_t,
   if projection_matrix is None:
     return kernel_fn(data_normalizer * data) + kernel_epsilon
   else:
-    data_mod_shape = data.shape[0:len(batch_dims_t)] + projection_matrix.shape
-    data_thick_random_matrix = jnp.zeros(data_mod_shape) + projection_matrix
     data_dash = lax.dot_general(
         data_normalizer * data,
-        data_thick_random_matrix,
-        (((data.ndim - 1,), (data_thick_random_matrix.ndim - 1,)),
-         (batch_dims_t, batch_dims_t)),
+        projection_matrix,
+        (((data.ndim - 1,), (1,)), ((), ())),
         precision=precision)
   data_prime = kernel_fn(data_dash) + kernel_epsilon
   return data_prime
@@ -598,8 +589,6 @@ class FastAttentionviaLowRankDecomposition(FastAttention):
     batch_dims = tuple(onp.delete(range(n), axis + (n - 1,)))
     # q & k -> (bs, <non-attention dims>, num_heads, <attention dims>, channels)
     qk_perm = batch_dims + axis + (n - 1,)
-    k_extra_perm = axis + batch_dims + (n - 1,)
-    key_extra = key.transpose(k_extra_perm)
     key = key.transpose(qk_perm)
     query = query.transpose(qk_perm)
     # v -> (bs, <non-attention dims>, num_heads, <attention dims>, channels)
@@ -638,9 +627,6 @@ class FastAttentionviaLowRankDecomposition(FastAttention):
         return result
       else:
         # Unidirectional, normalized attention.
-        thick_all_ones = jnp.zeros(key.shape[0:-1]) + jnp.ones(
-            key_extra.shape[0:len(axis)])
-
         index = attention_dims_t[0]
         t_slice_shape = key_prime.shape[0:len(batch_dims_t)] + (
             key_prime.shape[-1],)
@@ -678,20 +664,9 @@ class FastAttentionviaLowRankDecomposition(FastAttention):
         return result
       else:
         # Bidirectional, normalized attention.
-        thick_all_ones = jnp.zeros(key.shape[0:-1]) + jnp.ones(
-            key_extra.shape[0:len(axis)])
-        contract_key = tuple(
-            range(len(batch_dims),
-                  len(batch_dims) + len(axis)))
-        contract_thick_all_ones = tuple(
-            range(thick_all_ones.ndim - len(axis), thick_all_ones.ndim))
         # Construct T = (K^{'})^{T} 1_L
-        # k (bs, <non-attention dims>, num_heads, <attention dims>, channels)
-        T = lax.dot_general(
-            key_prime,
-            thick_all_ones, ((contract_key, contract_thick_all_ones),
-                             (batch_dims_t, batch_dims_t)),
-            precision=precision)
+        # T (bs, <non-attention dims>, num_heads, channels_m)
+        T = jnp.sum(key_prime, axis=attention_dims_t)
 
         # Construct partition function: R = Q^{'} T = Q^{'}(K^{'})^{T} 1_L
         # q_p (bs, <non-attention dims>, num_heads, <attention dims>, channs_m)
