@@ -99,6 +99,16 @@ class CBertScorer(object):
 
     scores = collections.defaultdict(list)
 
+    # Move layer extraction out of the example loop.
+    all_cand_embeddings = layers[:n_examples]
+    all_ref_embeddings = layers[-n_examples:]
+
+    if not all_ref_embeddings:
+      return scores
+
+    # Assume all examples have the same layers.
+    layer_numbers = [int(k) for k in all_ref_embeddings[0].keys()]
+
     for example_idx in range(n_examples):
       # Ignore the first and last tokens when cheking similarity because
       # every sentence starts and ends with [CLS] and [SEP] tokens.
@@ -133,21 +143,16 @@ class CBertScorer(object):
                           all_ref_tokens[example_idx]))
       # pylint: enable=g-explicit-length-test
 
-      all_cand_embeddings = layers[:n_examples]
-      all_ref_embeddings = layers[-n_examples:]
-
-      layer_numbers = [int(k) for k in all_ref_embeddings[0].keys()]
-
       for ln in layer_numbers:
         cand_embeddings = np.vstack(all_cand_embeddings[example_idx][ln])[1:-1]
         ref_embeddings = np.vstack(all_ref_embeddings[example_idx][ln])[1:-1]
 
         # Calculate cosine similarity by normalizing then dot product of all
         # pairs.
-        cand_embeddings /= np.sqrt(
-            np.square(cand_embeddings).sum(axis=1, keepdims=True))
-        ref_embeddings /= np.sqrt(
-            np.square(ref_embeddings).sum(axis=1, keepdims=True))
+        cand_embeddings /= np.linalg.norm(
+            cand_embeddings, axis=1, keepdims=True)
+        ref_embeddings /= np.linalg.norm(
+            ref_embeddings, axis=1, keepdims=True)
 
         sim_matrix = np.matmul(cand_embeddings, ref_embeddings.T)
 
@@ -155,32 +160,21 @@ class CBertScorer(object):
         recall = 0
 
         if self.medical_tokens:
-          idf_sum = 0
-          for cand_idx in range(len(cand_tokens)):
-            idf_val = idfs[cand_tokens[cand_idx]]
-            precision += idf_val * np.max(sim_matrix[cand_idx])
-            idf_sum += idf_val
-          if idf_sum == 0:
-            precision = np.nan
-          else:
-            precision /= idf_sum
+          cand_idfs = np.array([idfs[t] for t in cand_tokens])
+          ref_idfs = np.array([idfs[t] for t in ref_tokens])
 
-          idf_sum = 0
-          for ref_idx in range(len(ref_tokens)):
-            idf_val = idfs[ref_tokens[ref_idx]]
-            recall += idf_val * np.max(sim_matrix[:, ref_idx])
+          cand_max_sim = np.max(sim_matrix, axis=1)
+          idf_sum = np.sum(cand_idfs)
+          precision = (np.dot(cand_idfs, cand_max_sim) / idf_sum
+                       if idf_sum > 0 else np.nan)
 
-            idf_sum += idf_val
-          if idf_sum == 0:
-            recall = np.nan
-          else:
-            recall /= idf_sum
+          ref_max_sim = np.max(sim_matrix, axis=0)
+          idf_sum = np.sum(ref_idfs)
+          recall = (np.dot(ref_idfs, ref_max_sim) / idf_sum
+                    if idf_sum > 0 else np.nan)
         else:
-          precision = np.sum(np.max(sim_matrix, axis=1))
-          precision /= len(cand_tokens)
-
-          recall = np.sum(np.max(sim_matrix, axis=0))
-          recall /= len(ref_tokens)
+          precision = np.mean(np.max(sim_matrix, axis=1))
+          recall = np.mean(np.max(sim_matrix, axis=0))
 
         if precision == 0 and recall == 0:
           f_score = 0
