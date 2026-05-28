@@ -1,3 +1,7 @@
 ## 2025-05-22 - ROUGE LCS Algorithmic Optimizations
 **Learning:** The default ROUGE LCS implementation suffered from several performance anti-patterns in Python: O(M*N) memory usage for simple length checks, O(N^2) list building using `insert(0, ...)`, and redundant O(M*N) DP calculations for disjoint token sequences or non-overlapping sentences in summaries.
 **Action:** Always use space-optimized DP ($O(\min(M, N))$) when only the length is needed. Use `append()` + `reverse()` for efficient list building. Implement fast-path checks using `set` intersections to bypass expensive algorithms. Pre-calculate sets in loops to avoid redundant conversions. Use local variable lookups and conditional expressions instead of `max()` in tight loops.
+
+## 2025-05-28 - Performer JAX Broadcasting and Contraction Optimizations
+**Learning:** In Performer JAX, manually broadcasting projection matrices to create "thick" matrices and using dot products with explicit "all-ones" tensors for partition function calculations are significant performance anti-patterns. These operations increase memory pressure and create larger XLA graphs than necessary.
+**Action:** Use native JAX broadcasting in `lax.dot_general` by specifying empty batch dimensions when one operand doesn't have them. Replace contractions with ones-tensors with `jnp.sum` over the target axes. These changes yielded a ~36% speedup in bidirectional attention benchmarks.
