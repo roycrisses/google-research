@@ -35,6 +35,7 @@ from __future__ import division
 from __future__ import print_function
 
 import collections
+import itertools
 import re
 
 from absl import logging
@@ -43,6 +44,7 @@ import numpy as np
 import six
 from six.moves import map
 from six.moves import range
+from six.moves import zip
 from rouge_score import scoring
 from rouge_score import tokenizers
 
@@ -177,10 +179,8 @@ def _create_ngrams(tokens, n):
     A dictionary mapping each bigram to the number of occurrences.
   """
 
-  ngrams = collections.Counter()
-  for ngram in (tuple(tokens[i:i + n]) for i in range(len(tokens) - n + 1)):
-    ngrams[ngram] += 1
-  return ngrams
+  return collections.Counter(
+      zip(*(itertools.islice(tokens, i, None) for i in range(n))))
 
 
 def _score_lcs(target_tokens, prediction_tokens):
@@ -215,12 +215,16 @@ def _lcs_table(ref, can):
   rows = len(ref)
   cols = len(can)
   lcs_table = [[0] * (cols + 1) for _ in range(rows + 1)]
+  can_set = set(can)
   for i in range(1, rows + 1):
     ref_i = ref[i - 1]
     row_i = lcs_table[i]
     row_prev = lcs_table[i - 1]
-    for j in range(1, cols + 1):
-      if ref_i == can[j - 1]:
+    if ref_i not in can_set:
+      lcs_table[i] = row_prev
+      continue
+    for j, can_j in enumerate(can, 1):
+      if ref_i == can_j:
         row_i[j] = row_prev[j - 1] + 1
       else:
         v1 = row_prev[j]
@@ -231,28 +235,34 @@ def _lcs_table(ref, can):
 
 def _lcs_length(ref, can):
   """Compute LCS length efficiently."""
+  can_set = set(can)
+  ref = [x for x in ref if x in can_set]
+  if not ref:
+    return 0
+  ref_set = set(ref)
+  can = [x for x in can if x in ref_set]
+  if not can:
+    return 0
+
   if len(ref) < len(can):
     ref, can = can, ref
 
-  rows = len(ref)
   cols = len(can)
-  # prev_row[j] is lcs_table[i-1][j]
-  # curr_row[j] is lcs_table[i][j]
-  prev_row = [0] * (cols + 1)
-  curr_row = [0] * (cols + 1)
-
-  for i in range(1, rows + 1):
-    ref_i = ref[i - 1]
-    for j in range(1, cols + 1):
-      if ref_i == can[j - 1]:
-        curr_row[j] = prev_row[j - 1] + 1
+  # row[j] is lcs_table[i][j]
+  row = [0] * (cols + 1)
+  for ref_i in ref:
+    prev_diag = 0
+    for j, can_j in enumerate(can, 1):
+      tmp = row[j]
+      if ref_i == can_j:
+        row[j] = prev_diag + 1
       else:
-        v1 = prev_row[j]
-        v2 = curr_row[j - 1]
-        curr_row[j] = v1 if v1 >= v2 else v2
-    prev_row, curr_row = curr_row, prev_row
+        v1 = row[j]
+        v2 = row[j - 1]
+        row[j] = v1 if v1 >= v2 else v2
+      prev_diag = tmp
 
-  return prev_row[cols]
+  return row[cols]
 
 
 def _backtrack_norec(t, ref, can):
@@ -292,13 +302,8 @@ def _summary_level_lcs(ref_sent, can_sent):
     return scoring.Score(precision=0, recall=0, fmeasure=0)
 
   # get token counts to prevent double counting
-  token_cnts_r = collections.Counter()
-  token_cnts_c = collections.Counter()
-  for s in ref_sent:
-    # s is a list of tokens
-    token_cnts_r.update(s)
-  for s in can_sent:
-    token_cnts_c.update(s)
+  token_cnts_r = collections.Counter(itertools.chain.from_iterable(ref_sent))
+  token_cnts_c = collections.Counter(itertools.chain.from_iterable(can_sent))
 
   can_sets = [set(s) for s in can_sent]
 
@@ -364,10 +369,7 @@ def _score_ngrams(target_ngrams, prediction_ngrams):
     A Score object containing computed scores.
   """
 
-  intersection_ngrams_count = 0
-  for ngram in six.iterkeys(target_ngrams):
-    intersection_ngrams_count += min(target_ngrams[ngram],
-                                     prediction_ngrams[ngram])
+  intersection_ngrams_count = sum((target_ngrams & prediction_ngrams).values())
   target_ngrams_count = sum(target_ngrams.values())
   prediction_ngrams_count = sum(prediction_ngrams.values())
 

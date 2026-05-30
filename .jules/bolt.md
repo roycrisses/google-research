@@ -1,3 +1,7 @@
 ## 2025-05-22 - ROUGE LCS Algorithmic Optimizations
 **Learning:** The default ROUGE LCS implementation suffered from several performance anti-patterns in Python: O(M*N) memory usage for simple length checks, O(N^2) list building using `insert(0, ...)`, and redundant O(M*N) DP calculations for disjoint token sequences or non-overlapping sentences in summaries.
 **Action:** Always use space-optimized DP ($O(\min(M, N))$) when only the length is needed. Use `append()` + `reverse()` for efficient list building. Implement fast-path checks using `set` intersections to bypass expensive algorithms. Pre-calculate sets in loops to avoid redundant conversions. Use local variable lookups and conditional expressions instead of `max()` in tight loops.
+
+## 2025-05-30 - Pythonic ROUGE Bottleneck Mitigation
+**Learning:** Significant ROUGE performance gains come from: 1) Filtering tokens to their intersection before expensive LCS DP (O(N*M) -> O(K^2) where K << N, M). 2) Using `Counter` multiset intersection (`&`) instead of manual loops. 3) Row-sharing in LCS tables (`table[i] = table[i-1]`) when a token has no matches in the candidate set, avoiding inner loop entirely. 4) The `zip(*islice)` recipe for n-gram creation.
+**Action:** Always check if a problem can be reduced in size (like token intersection filtering) before applying O(N^2) or higher algorithms. Use C-optimized multiset operations in `collections.Counter` whenever possible.
