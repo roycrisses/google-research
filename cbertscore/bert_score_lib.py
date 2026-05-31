@@ -97,6 +97,11 @@ class CBertScorer(object):
     all_cand_tokens = tokens[:n_examples]
     all_ref_tokens = tokens[-n_examples:]
 
+    all_cand_embeddings = layers[:n_examples]
+    all_ref_embeddings = layers[-n_examples:]
+
+    layer_numbers = [int(k) for k in all_ref_embeddings[0].keys()]
+
     scores = collections.defaultdict(list)
 
     for example_idx in range(n_examples):
@@ -114,7 +119,8 @@ class CBertScorer(object):
       # pylint: disable=g-explicit-length-test
       if (skip_empty_sentences_after_tokenization and
           (len(cand_tokens) == 0 or len(ref_tokens) == 0)):
-        scores[-1] = [CBERTScore(precision=-1, recall=-1, f_score=-1)]
+        for ln in layer_numbers:
+          scores[ln].append(CBERTScore(precision=-1, recall=-1, f_score=-1))
         continue
 
       if len(cand_tokens) == 0:
@@ -133,11 +139,6 @@ class CBertScorer(object):
                           all_ref_tokens[example_idx]))
       # pylint: enable=g-explicit-length-test
 
-      all_cand_embeddings = layers[:n_examples]
-      all_ref_embeddings = layers[-n_examples:]
-
-      layer_numbers = [int(k) for k in all_ref_embeddings[0].keys()]
-
       for ln in layer_numbers:
         cand_embeddings = np.vstack(all_cand_embeddings[example_idx][ln])[1:-1]
         ref_embeddings = np.vstack(all_ref_embeddings[example_idx][ln])[1:-1]
@@ -155,32 +156,25 @@ class CBertScorer(object):
         recall = 0
 
         if self.medical_tokens:
-          idf_sum = 0
-          for cand_idx in range(len(cand_tokens)):
-            idf_val = idfs[cand_tokens[cand_idx]]
-            precision += idf_val * np.max(sim_matrix[cand_idx])
-            idf_sum += idf_val
-          if idf_sum == 0:
+          cand_idfs = np.array([idfs[t] for t in cand_tokens])
+          ref_idfs = np.array([idfs[t] for t in ref_tokens])
+
+          precision_denom = np.sum(cand_idfs)
+          if precision_denom == 0:
             precision = np.nan
           else:
-            precision /= idf_sum
+            precision = np.sum(cand_idfs * np.max(sim_matrix, axis=1))
+            precision /= precision_denom
 
-          idf_sum = 0
-          for ref_idx in range(len(ref_tokens)):
-            idf_val = idfs[ref_tokens[ref_idx]]
-            recall += idf_val * np.max(sim_matrix[:, ref_idx])
-
-            idf_sum += idf_val
-          if idf_sum == 0:
+          recall_denom = np.sum(ref_idfs)
+          if recall_denom == 0:
             recall = np.nan
           else:
-            recall /= idf_sum
+            recall = np.sum(ref_idfs * np.max(sim_matrix, axis=0))
+            recall /= recall_denom
         else:
-          precision = np.sum(np.max(sim_matrix, axis=1))
-          precision /= len(cand_tokens)
-
-          recall = np.sum(np.max(sim_matrix, axis=0))
-          recall /= len(ref_tokens)
+          precision = np.mean(np.max(sim_matrix, axis=1))
+          recall = np.mean(np.max(sim_matrix, axis=0))
 
         if precision == 0 and recall == 0:
           f_score = 0
