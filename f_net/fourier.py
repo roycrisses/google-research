@@ -49,10 +49,10 @@ def _two_dim_matmul(x, matrix_dim_one,
                     matrix_dim_two,
                     precision):
   """Applies 2D matrix multiplication to 2D input arrays."""
-  return jnp.einsum(  # pytype: disable=wrong-arg-types  # jnp-type
-      "ij,jk,ni->nk",
-      x,
-      matrix_dim_two,
+  # Using nested matmuls is more efficient than einsum for this operation.
+  # First, multiply hidden dimension: (S, H) @ (H, H) -> (S, H)
+  # Then, multiply sequence dimension: (S, S) @ (S, H) -> (S, H)
+  return jnp.matmul(
       matrix_dim_one,
-      optimize=True,
+      jnp.matmul(x, matrix_dim_two, precision=precision),
       precision=precision)

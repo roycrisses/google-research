@@ -177,12 +177,12 @@ class LinearTransform(nn.Module):
     mat_seq = self.param("seq_kernel", self.kernel_init,
                          (inputs.shape[-2], inputs.shape[-2]))
 
-    return jnp.einsum(  # pytype: disable=wrong-arg-types  # jnp-type
-        "bij,jk,ni->bnk",
-        inputs,
-        mat_hidden,
+    # Using nested matmuls is more efficient than einsum for this operation.
+    # First, multiply hidden dimension: (B, S, H) @ (H, H) -> (B, S, H)
+    # Then, multiply sequence dimension: (S, S) @ (B, S, H) -> (B, S, H)
+    return jnp.matmul(
         mat_seq,
-        optimize=True,
+        jnp.matmul(inputs, mat_hidden, precision=self.precision),
         precision=self.precision)
 
 
@@ -231,12 +231,12 @@ class RandomTransform(nn.Module):
     del padding_mask  # Only used by self-attention sublayer.
     del deterministic  # RandomTransform uses fixed, random matrices.
 
-    return jnp.einsum(  # pytype: disable=wrong-arg-types  # jnp-type
-        "bij,jk,ni->bnk",
-        inputs,
-        self.mat_hidden,
+    # Using nested matmuls is more efficient than einsum for this operation.
+    # First, multiply hidden dimension: (B, S, H) @ (H, H) -> (B, S, H)
+    # Then, multiply sequence dimension: (S, S) @ (B, S, H) -> (B, S, H)
+    return jnp.matmul(
         self.mat_seq,
-        optimize=True,
+        jnp.matmul(inputs, self.mat_hidden, precision=self.precision),
         precision=self.precision)
 
 
