@@ -41,8 +41,20 @@ def softmin(cost, f, g, eps, axis):
 
 
 def error(cost, f, g, eps, b):
-  b_target = tf.math.reduce_sum(transport(cost, f, g, eps), axis=1)
-  return tf.reduce_max((tf.abs(b_target - b) / b)[:])
+  """Computes the Sinkhorn error."""
+  if f.shape.rank == 2:
+    log_b_target = g / eps + tf.reduce_logsumexp(
+        (f[:, :, tf.newaxis] - cost) / eps, axis=1)
+  else:
+    # If cost is already expanded to 4D (batch, n, m, 1), use it as is.
+    if cost.shape.rank == 4:
+      log_b_target = g / eps + tf.reduce_logsumexp(
+          (f[:, :, tf.newaxis, :] - cost) / eps, axis=1)
+    else:
+      log_b_target = g / eps + tf.reduce_logsumexp(
+          (f[:, :, tf.newaxis, :] - cost[:, :, :, tf.newaxis]) / eps, axis=1)
+  b_target = tf.exp(log_b_target)
+  return tf.reduce_max(tf.abs(b_target - b) / b)
 
 
 def transport(cost, f, g, eps):
@@ -120,10 +132,26 @@ def sinkhorn_iterations(x,
   logb = tf.math.log(b)
   cost, d_cost = cost_fn(x, y, power)
 
+  cost_is_3d = (loga.shape.rank == 3)
+  if cost_is_3d:
+    cost_expanded = cost[:, :, :, tf.newaxis]
+  else:
+    cost_expanded = cost
+
   def body_fn(f, g, eps, num_iter):
     for _ in range(inner_num_iter):
-      g = eps * logb + softmin(cost, f, g, eps, axis=1) + g
-      f = eps * loga + softmin(cost, f, g, eps, axis=2) + f
+      # Optimized updates: g = eps * (logb - logsumexp((f - cost) / eps, axis=1))
+      # and f = eps * (loga - logsumexp((g - cost) / eps, axis=2))
+      if cost_is_3d:
+        g = eps * (logb - tf.reduce_logsumexp(
+            (f[:, :, tf.newaxis, :] - cost_expanded) / eps, axis=1))
+        f = eps * (loga - tf.reduce_logsumexp(
+            (g[:, tf.newaxis, :, :] - cost_expanded) / eps, axis=2))
+      else:
+        g = eps * (logb - tf.reduce_logsumexp(
+            (f[:, :, tf.newaxis] - cost_expanded) / eps, axis=1))
+        f = eps * (loga - tf.reduce_logsumexp(
+            (g[:, tf.newaxis, :] - cost_expanded) / eps, axis=2))
       eps = tf.math.maximum(eps * epsilon_decay, epsilon)
     return [f, g, eps, num_iter + inner_num_iter]
 
