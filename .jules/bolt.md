@@ -1,3 +1,7 @@
 ## 2025-05-22 - ROUGE LCS Algorithmic Optimizations
 **Learning:** The default ROUGE LCS implementation suffered from several performance anti-patterns in Python: O(M*N) memory usage for simple length checks, O(N^2) list building using `insert(0, ...)`, and redundant O(M*N) DP calculations for disjoint token sequences or non-overlapping sentences in summaries.
 **Action:** Always use space-optimized DP ($O(\min(M, N))$) when only the length is needed. Use `append()` + `reverse()` for efficient list building. Implement fast-path checks using `set` intersections to bypass expensive algorithms. Pre-calculate sets in loops to avoid redundant conversions. Use local variable lookups and conditional expressions instead of `max()` in tight loops.
+
+## 2025-06-04 - Sinkhorn Log-Space and Algebraic Optimizations
+**Learning:** The Sinkhorn algorithm iterations can be significantly optimized by inlining the `softmin` logic and removing redundant dual variable terms from the updates. Additionally, calculating marginal errors by materializing the full $N \times M$ transport matrix is a major memory bottleneck; using `reduce_logsumexp` to compute marginals in log-space is both faster and more stable.
+**Action:** Avoid materializing large $N \times M$ matrices whenever marginals suffice. Inline iterative updates to eliminate redundant addition/subtraction of potentials. Always double-check multivariate distance implementations for missing cross-term factors (e.g., $x^2 + y^2 - 2xy$).
