@@ -41,8 +41,15 @@ def softmin(cost, f, g, eps, axis):
 
 
 def error(cost, f, g, eps, b):
-  b_target = tf.math.reduce_sum(transport(cost, f, g, eps), axis=1)
-  return tf.reduce_max((tf.abs(b_target - b) / b)[:])
+  """Computes the Sinkhorn error in log-space for numerical stability."""
+  if f.shape.rank == 2:
+    log_b_target = g / eps + tf.reduce_logsumexp(
+        (f[:, :, tf.newaxis] - cost) / eps, axis=1)
+  else:
+    log_b_target = g / eps + tf.reduce_logsumexp(
+        (f[:, :, tf.newaxis, :] - cost[:, :, :, tf.newaxis]) / eps, axis=1)
+  b_target = tf.exp(log_b_target)
+  return tf.reduce_max(tf.abs(b_target - b) / b)
 
 
 def transport(cost, f, g, eps):
@@ -72,7 +79,7 @@ def cost_fn(x, y,
     x2 = tf.reduce_sum(x**2, axis=2)
     y2 = tf.reduce_sum(y**2, axis=2)
     cost = (x2[:, :, tf.newaxis] + y2[:, tf.newaxis, :] -
-            tf.matmul(x, y, transpose_b=True))**(power / 2)
+            2.0 * tf.matmul(x, y, transpose_b=True))**(power / 2)
     derivative = None
     return cost, derivative
 
@@ -120,10 +127,27 @@ def sinkhorn_iterations(x,
   logb = tf.math.log(b)
   cost, d_cost = cost_fn(x, y, power)
 
+  if a.shape.rank == 3:
+    cost_iterations = cost[:, :, :, tf.newaxis]
+  else:
+    cost_iterations = cost
+
   def body_fn(f, g, eps, num_iter):
+    """Update Sinkhorn potentials by inlining softmin and removing redundancy."""
     for _ in range(inner_num_iter):
-      g = eps * logb + softmin(cost, f, g, eps, axis=1) + g
-      f = eps * loga + softmin(cost, f, g, eps, axis=2) + f
+      if a.shape.rank == 2:
+        # We inline softmin logic and eliminate the redundant addition of the
+        # dual potential being updated, which reduces memory allocations and
+        # arithmetic operations.
+        g = eps * (logb - tf.reduce_logsumexp(
+            (f[:, :, tf.newaxis] - cost_iterations) / eps, axis=1))
+        f = eps * (loga - tf.reduce_logsumexp(
+            (g[:, tf.newaxis, :] - cost_iterations) / eps, axis=2))
+      else:
+        g = eps * (logb - tf.reduce_logsumexp(
+            (f[:, :, tf.newaxis, :] - cost_iterations) / eps, axis=1))
+        f = eps * (loga - tf.reduce_logsumexp(
+            (g[:, tf.newaxis, :, :] - cost_iterations) / eps, axis=2))
       eps = tf.math.maximum(eps * epsilon_decay, epsilon)
     return [f, g, eps, num_iter + inner_num_iter]
 
