@@ -36,13 +36,38 @@ def center(cost, f, g):
         f[:, :, tf.newaxis, :] + g[:, tf.newaxis, :, :])
 
 
+def _log_marginal(cost, f, g, eps, axis):
+  """Computes log of transport matrix marginals efficiently."""
+  # If axis=1, we sum over rows (index i) to get column marginals (index j).
+  # If axis=2, we sum over columns (index j) to get row marginals (index i).
+  # We avoid materializing the full centered matrix to save memory.
+  if f.shape.rank == 2:
+    if axis == 1: # marginal over j (columns)
+      return (g / eps +
+              tf.reduce_logsumexp((f[:, :, tf.newaxis] - cost) / eps, axis=1))
+    else: # marginal over i (rows)
+      return (f / eps +
+              tf.reduce_logsumexp((g[:, tf.newaxis, :] - cost) / eps, axis=2))
+  else:
+    if axis == 1:
+      return (g / eps +
+              tf.reduce_logsumexp((f[:, :, tf.newaxis, :] -
+                                   cost[:, :, :, tf.newaxis]) / eps, axis=1))
+    else:
+      return (f / eps +
+              tf.reduce_logsumexp((g[:, tf.newaxis, :, :] -
+                                   cost[:, :, :, tf.newaxis]) / eps, axis=2))
+
+
 def softmin(cost, f, g, eps, axis):
   return -eps * tf.reduce_logsumexp(-center(cost, f, g) / eps, axis=axis)
 
 
 def error(cost, f, g, eps, b):
-  b_target = tf.math.reduce_sum(transport(cost, f, g, eps), axis=1)
-  return tf.reduce_max((tf.abs(b_target - b) / b)[:])
+  """Computes the Sinkhorn error in log-space to avoid large matrix allocation."""
+  log_b_target = _log_marginal(cost, f, g, eps, axis=1)
+  b_target = tf.exp(log_b_target)
+  return tf.reduce_max(tf.abs(b_target - b) / b)
 
 
 def transport(cost, f, g, eps):
@@ -71,8 +96,10 @@ def cost_fn(x, y,
   elif x.shape.rank == 3 and y.shape.rank == 3:
     x2 = tf.reduce_sum(x**2, axis=2)
     y2 = tf.reduce_sum(y**2, axis=2)
-    cost = (x2[:, :, tf.newaxis] + y2[:, tf.newaxis, :] -
-            tf.matmul(x, y, transpose_b=True))**(power / 2)
+    # L2 distance squared: |x-y|^2 = x^2 + y^2 - 2xy.
+    # We use ReLU to ensure numerical stability (avoiding tiny negative values).
+    cost = tf.nn.relu(x2[:, :, tf.newaxis] + y2[:, tf.newaxis, :] -
+                      2.0 * tf.matmul(x, y, transpose_b=True))**(power / 2)
     derivative = None
     return cost, derivative
 
@@ -122,8 +149,11 @@ def sinkhorn_iterations(x,
 
   def body_fn(f, g, eps, num_iter):
     for _ in range(inner_num_iter):
-      g = eps * logb + softmin(cost, f, g, eps, axis=1) + g
-      f = eps * loga + softmin(cost, f, g, eps, axis=2) + f
+      # Optimized updates: use _log_marginal to avoid redundant ops.
+      # g = eps * (logb - logsumexp((f - cost) / eps))
+      # f = eps * (loga - logsumexp((g - cost) / eps))
+      g = eps * (logb - _log_marginal(cost, f, g, eps, axis=1) + g / eps)
+      f = eps * (loga - _log_marginal(cost, f, g, eps, axis=2) + f / eps)
       eps = tf.math.maximum(eps * epsilon_decay, epsilon)
     return [f, g, eps, num_iter + inner_num_iter]
 

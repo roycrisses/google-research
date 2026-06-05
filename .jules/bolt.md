@@ -1,3 +1,7 @@
 ## 2025-05-22 - ROUGE LCS Algorithmic Optimizations
 **Learning:** The default ROUGE LCS implementation suffered from several performance anti-patterns in Python: O(M*N) memory usage for simple length checks, O(N^2) list building using `insert(0, ...)`, and redundant O(M*N) DP calculations for disjoint token sequences or non-overlapping sentences in summaries.
 **Action:** Always use space-optimized DP ($O(\min(M, N))$) when only the length is needed. Use `append()` + `reverse()` for efficient list building. Implement fast-path checks using `set` intersections to bypass expensive algorithms. Pre-calculate sets in loops to avoid redundant conversions. Use local variable lookups and conditional expressions instead of `max()` in tight loops.
+
+## 2025-06-05 - Sinkhorn Log-Space Marginals and Multivariate Cost Stability
+**Learning:** Materializing the full $N \times M$ transport matrix in Sinkhorn iterations is a memory bottleneck ($O(NM)$). Standard Euclidean distance expansion ($x^2 + y^2 - 2xy$) can yield tiny negative values due to floating-point errors, causing `NaN` in power functions.
+**Action:** Compute marginals in log-space using `tf.reduce_logsumexp` without materializing the full centered matrix. Encapsulate rank-checking and slicing logic in a unified helper like `_log_marginal` to keep code DRY. Always wrap Euclidean distance expansion in `tf.nn.relu` to ensure numerical stability.
