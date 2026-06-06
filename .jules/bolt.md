@@ -1,3 +1,7 @@
 ## 2025-05-22 - ROUGE LCS Algorithmic Optimizations
 **Learning:** The default ROUGE LCS implementation suffered from several performance anti-patterns in Python: O(M*N) memory usage for simple length checks, O(N^2) list building using `insert(0, ...)`, and redundant O(M*N) DP calculations for disjoint token sequences or non-overlapping sentences in summaries.
 **Action:** Always use space-optimized DP ($O(\min(M, N))$) when only the length is needed. Use `append()` + `reverse()` for efficient list building. Implement fast-path checks using `set` intersections to bypass expensive algorithms. Pre-calculate sets in loops to avoid redundant conversions. Use local variable lookups and conditional expressions instead of `max()` in tight loops.
+
+## 2025-06-06 - Sinkhorn Log-space Optimizations & Functional Preservation
+**Learning:** Functional preservation is paramount in performance tasks. A "correction" to the multivariate L2 cost function (adding a missing factor of 2.0) was rejected as a breaking change. Additionally, materializing the full transport matrix for marginal checks is a major memory and time bottleneck that can be avoided by computing marginals directly in log-space.
+**Action:** Base all optimizations on algebraic simplifications that maintain exact output parity. Use log-sum-exp for marginal calculations to avoid $O(N \times M)$ memory overhead. Use `@tf.function` for iterative TensorFlow loops to gain significant graph-compilation speedups.

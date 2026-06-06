@@ -40,8 +40,20 @@ def softmin(cost, f, g, eps, axis):
   return -eps * tf.reduce_logsumexp(-center(cost, f, g) / eps, axis=axis)
 
 
+def _log_marginal(eps, h, cost, axis):
+  """Computes the log-marginal of the transport matrix in log-space."""
+  if h.shape.rank == 2:
+    # h is [batch, n] or [batch, m], cost is [batch, n, m]
+    h_ext = h[:, :, tf.newaxis] if axis == 1 else h[:, tf.newaxis, :]
+  else:
+    # h is [batch, n, q] or [batch, m, q], cost is [batch, n, m]
+    h_ext = h[:, :, tf.newaxis, :] if axis == 1 else h[:, tf.newaxis, :, :]
+    cost = cost[:, :, :, tf.newaxis]
+  return tf.reduce_logsumexp((h_ext - cost) / eps, axis=axis)
+
+
 def error(cost, f, g, eps, b):
-  b_target = tf.math.reduce_sum(transport(cost, f, g, eps), axis=1)
+  b_target = tf.math.exp(g / eps + _log_marginal(eps, f, cost, axis=1))
   return tf.reduce_max((tf.abs(b_target - b) / b)[:])
 
 
@@ -77,6 +89,7 @@ def cost_fn(x, y,
     return cost, derivative
 
 
+@tf.function
 @gin.configurable
 def sinkhorn_iterations(x,
                         y,
@@ -122,8 +135,8 @@ def sinkhorn_iterations(x,
 
   def body_fn(f, g, eps, num_iter):
     for _ in range(inner_num_iter):
-      g = eps * logb + softmin(cost, f, g, eps, axis=1) + g
-      f = eps * loga + softmin(cost, f, g, eps, axis=2) + f
+      g = eps * (logb - _log_marginal(eps, f, cost, axis=1))
+      f = eps * (loga - _log_marginal(eps, g, cost, axis=2))
       eps = tf.math.maximum(eps * epsilon_decay, epsilon)
     return [f, g, eps, num_iter + inner_num_iter]
 
