@@ -35,6 +35,7 @@ from __future__ import division
 from __future__ import print_function
 
 import collections
+import itertools
 import re
 
 from absl import logging
@@ -177,10 +178,8 @@ def _create_ngrams(tokens, n):
     A dictionary mapping each bigram to the number of occurrences.
   """
 
-  ngrams = collections.Counter()
-  for ngram in (tuple(tokens[i:i + n]) for i in range(len(tokens) - n + 1)):
-    ngrams[ngram] += 1
-  return ngrams
+  return collections.Counter(
+      zip(*(itertools.islice(tokens, i, None) for i in range(n))))
 
 
 def _score_lcs(target_tokens, prediction_tokens):
@@ -215,12 +214,15 @@ def _lcs_table(ref, can):
   rows = len(ref)
   cols = len(can)
   lcs_table = [[0] * (cols + 1) for _ in range(rows + 1)]
-  for i in range(1, rows + 1):
-    ref_i = ref[i - 1]
+  can_set = set(can)
+  for i, ref_i in enumerate(ref, 1):
+    if ref_i not in can_set:
+      lcs_table[i] = lcs_table[i - 1]
+      continue
     row_i = lcs_table[i]
     row_prev = lcs_table[i - 1]
-    for j in range(1, cols + 1):
-      if ref_i == can[j - 1]:
+    for j, can_j in enumerate(can, 1):
+      if ref_i == can_j:
         row_i[j] = row_prev[j - 1] + 1
       else:
         v1 = row_prev[j]
@@ -234,25 +236,30 @@ def _lcs_length(ref, can):
   if len(ref) < len(can):
     ref, can = can, ref
 
+  # Filter tokens to only those present in both sequences to reduce DP table.
+  can_set = set(can)
+  ref = [x for x in ref if x in can_set]
+  if not ref:
+    return 0
+  ref_set = set(ref)
+  can = [x for x in can if x in ref_set]
+
   rows = len(ref)
   cols = len(can)
-  # prev_row[j] is lcs_table[i-1][j]
-  # curr_row[j] is lcs_table[i][j]
-  prev_row = [0] * (cols + 1)
+  # Single row DP approach for memory efficiency and potentially speed.
   curr_row = [0] * (cols + 1)
-
-  for i in range(1, rows + 1):
-    ref_i = ref[i - 1]
-    for j in range(1, cols + 1):
-      if ref_i == can[j - 1]:
-        curr_row[j] = prev_row[j - 1] + 1
+  for ref_i in ref:
+    prev_diag = 0
+    for j, can_j in enumerate(can, 1):
+      temp = curr_row[j]
+      if ref_i == can_j:
+        curr_row[j] = prev_diag + 1
       else:
-        v1 = prev_row[j]
-        v2 = curr_row[j - 1]
-        curr_row[j] = v1 if v1 >= v2 else v2
-    prev_row, curr_row = curr_row, prev_row
+        if curr_row[j - 1] > curr_row[j]:
+          curr_row[j] = curr_row[j - 1]
+      prev_diag = temp
 
-  return prev_row[cols]
+  return curr_row[cols]
 
 
 def _backtrack_norec(t, ref, can):
@@ -292,13 +299,8 @@ def _summary_level_lcs(ref_sent, can_sent):
     return scoring.Score(precision=0, recall=0, fmeasure=0)
 
   # get token counts to prevent double counting
-  token_cnts_r = collections.Counter()
-  token_cnts_c = collections.Counter()
-  for s in ref_sent:
-    # s is a list of tokens
-    token_cnts_r.update(s)
-  for s in can_sent:
-    token_cnts_c.update(s)
+  token_cnts_r = collections.Counter(itertools.chain.from_iterable(ref_sent))
+  token_cnts_c = collections.Counter(itertools.chain.from_iterable(can_sent))
 
   can_sets = [set(s) for s in can_sent]
 
@@ -348,8 +350,23 @@ def _find_union(lcs_list):
 
 def lcs_ind(ref, can):
   """Returns one of the longest lcs."""
-  t = _lcs_table(ref, can)
-  return _backtrack_norec(t, ref, can)
+  if not ref or not can:
+    return []
+
+  can_set = set(can)
+  ref_filtered = [(tok, i) for i, tok in enumerate(ref) if tok in can_set]
+  if not ref_filtered:
+    return []
+
+  ref_tokens = [x[0] for x in ref_filtered]
+  ref_indices = [x[1] for x in ref_filtered]
+
+  ref_set = set(ref_tokens)
+  can_filtered = [tok for tok in can if tok in ref_set]
+
+  t = _lcs_table(ref_tokens, can_filtered)
+  lcs_filtered_indices = _backtrack_norec(t, ref_tokens, can_filtered)
+  return [ref_indices[i] for i in lcs_filtered_indices]
 
 
 def _score_ngrams(target_ngrams, prediction_ngrams):
@@ -364,10 +381,8 @@ def _score_ngrams(target_ngrams, prediction_ngrams):
     A Score object containing computed scores.
   """
 
-  intersection_ngrams_count = 0
-  for ngram in six.iterkeys(target_ngrams):
-    intersection_ngrams_count += min(target_ngrams[ngram],
-                                     prediction_ngrams[ngram])
+  intersection_ngrams_count = sum(
+      (target_ngrams & prediction_ngrams).values())
   target_ngrams_count = sum(target_ngrams.values())
   prediction_ngrams_count = sum(prediction_ngrams.values())
 
