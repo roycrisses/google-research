@@ -37,11 +37,20 @@ def center(cost, f, g):
 
 
 def softmin(cost, f, g, eps, axis):
-  return -eps * tf.reduce_logsumexp(-center(cost, f, g) / eps, axis=axis)
+  return -eps * _log_marginal(cost, f, g, eps, axis=axis)
+
+
+def _log_marginal(cost, f, g, eps, axis):
+  """Computes the log-marginal of the transport matrix.
+
+  This avoids materializing the full N x M transport matrix, reducing memory
+  pressure from O(N*M) to O(N+M).
+  """
+  return tf.reduce_logsumexp(-center(cost, f, g) / eps, axis=axis)
 
 
 def error(cost, f, g, eps, b):
-  b_target = tf.math.reduce_sum(transport(cost, f, g, eps), axis=1)
+  b_target = tf.math.exp(_log_marginal(cost, f, g, eps, axis=1))
   return tf.reduce_max((tf.abs(b_target - b) / b)[:])
 
 
@@ -78,6 +87,7 @@ def cost_fn(x, y,
 
 
 @gin.configurable
+@tf.function
 def sinkhorn_iterations(x,
                         y,
                         a,
@@ -122,8 +132,9 @@ def sinkhorn_iterations(x,
 
   def body_fn(f, g, eps, num_iter):
     for _ in range(inner_num_iter):
-      g = eps * logb + softmin(cost, f, g, eps, axis=1) + g
-      f = eps * loga + softmin(cost, f, g, eps, axis=2) + f
+      # Optimized log-space updates that eliminate redundant dual variable terms.
+      g = eps * (logb - _log_marginal(cost, f, g, eps, axis=1)) + g
+      f = eps * (loga - _log_marginal(cost, f, g, eps, axis=2)) + f
       eps = tf.math.maximum(eps * epsilon_decay, epsilon)
     return [f, g, eps, num_iter + inner_num_iter]
 
