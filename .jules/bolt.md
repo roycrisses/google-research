@@ -1,3 +1,7 @@
 ## 2025-05-22 - ROUGE LCS Algorithmic Optimizations
 **Learning:** The default ROUGE LCS implementation suffered from several performance anti-patterns in Python: O(M*N) memory usage for simple length checks, O(N^2) list building using `insert(0, ...)`, and redundant O(M*N) DP calculations for disjoint token sequences or non-overlapping sentences in summaries.
 **Action:** Always use space-optimized DP ($O(\min(M, N))$) when only the length is needed. Use `append()` + `reverse()` for efficient list building. Implement fast-path checks using `set` intersections to bypass expensive algorithms. Pre-calculate sets in loops to avoid redundant conversions. Use local variable lookups and conditional expressions instead of `max()` in tight loops.
+
+## 2025-06-09 - Sinkhorn Algorithm Performance and Memory Optimization
+**Learning:** Adding `@tf.function` to iterative loops like Sinkhorn provides a massive speedup (~3-4x) by enabling graph compilation. However, when used with `@gin.configurable`, `@gin.configurable` must be the *outer* decorator to ensure dynamic configuration changes trigger retracing. Additionally, calculating transport marginals in log-space using `tf.reduce_logsumexp` avoids the O(N*M) memory overhead of materializing the full transport matrix, which is critical for scaling to larger point clouds.
+**Action:** Use `@tf.function` for core iterative algorithms but be mindful of decorator order with Gin. Prioritize log-space marginal calculations for memory-efficient Optimal Transport.
