@@ -145,30 +145,39 @@ class VRDEvaluator:
     # detected by one of the predictions. Following the metric definition of
     # object detection, duplicate detections will be considered as false
     # positives.
-    detected = [False] * len(groundtruths)
+    num_gt = len(groundtruths)
+    detected = [False] * num_gt
 
-    def match_groundtruth(prediction, detected):
-      # Checks if the prediction is a true or false positive.
-      for i, groundtruth in enumerate(groundtruths):
-        if detected[i]:
-          continue
-        if self.is_correct_prediction(prediction, groundtruth, attr=attr):
-          return i, detected
-      return -1, detected
+    # Cache frequently accessed attributes and methods into local variables.
+    attr_name = attr.value
+    tp_idx = self.TP_IDX
+    fp_idx = self.FP_IDX
+    fn_idx = self.FN_IDX
+    is_correct_prediction = self.is_correct_prediction
 
     results = numpy.zeros((self.NUM_LABELS, 3))
     for prediction in predictions:
-      label = getattr(prediction, attr.value)
-      i, detected = match_groundtruth(prediction, detected)
-      if i < 0:
-        results[label, self.FP_IDX] += 1
+      label = getattr(prediction, attr_name)
+      # Inline match_groundtruth logic to avoid function creation/closure
+      # overhead.
+      found_gt_idx = -1
+      for i in range(num_gt):
+        if detected[i]:
+          continue
+        if is_correct_prediction(prediction, groundtruths[i], attr=attr):
+          found_gt_idx = i
+          break
+
+      if found_gt_idx < 0:
+        results[label, fp_idx] += 1
       else:
-        detected[i] = True
-        results[label, self.TP_IDX] += 1
-    for i, groundtruth in enumerate(groundtruths):
+        detected[found_gt_idx] = True
+        results[label, tp_idx] += 1
+
+    for i in range(num_gt):
       if not detected[i]:
-        label = getattr(groundtruth, attr.value)
-        results[label, self.FN_IDX] += 1
+        label = getattr(groundtruths[i], attr_name)
+        results[label, fn_idx] += 1
     return results
 
   # TODO(ycsu): update the paper link after arxiv version is ready.
@@ -279,10 +288,14 @@ def compute_iou(bbox_a, bbox_b):
   xmax = min(bbox_a.xmax, bbox_b.xmax)
   ymin = max(bbox_a.ymin, bbox_b.ymin)
   ymax = min(bbox_a.ymax, bbox_b.ymax)
-  overlap = Box(bbox_a.image_id, 'overlap', ymin, xmin, ymax, xmax)
-  area_overlap = compute_area(overlap)
-  area_a = compute_area(bbox_a)
-  area_b = compute_area(bbox_b)
+
+  # Inline compute_area and avoid creating a Box object for the overlap.
+  area_overlap = max(0., xmax - xmin) * max(0., ymax - ymin)
+  if area_overlap == 0:
+    return 0.
+
+  area_a = max(0., bbox_a.xmax - bbox_a.xmin) * max(0., bbox_a.ymax - bbox_a.ymin)
+  area_b = max(0., bbox_b.xmax - bbox_b.xmin) * max(0., bbox_b.ymax - bbox_b.ymin)
   return area_overlap / (area_a + area_b - area_overlap)
 
 
