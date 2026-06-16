@@ -218,9 +218,54 @@ def noncausal_denominator(qs, ks):
   Returns:
     FAVOR normalizer in noncausal attention.
   """
-  all_ones = tf.ones([ks.shape[0]])
-  ks_sum = tf.einsum("lbhm,l->bhm", ks, all_ones)
+  ks_sum = tf.reduce_sum(ks, axis=0)
   return tf.einsum("lbhm,bhm->lbh", qs, ks_sum)
+
+
+@tf.function
+def _causal_numerator_fwd(qs, ks, vs):
+  l = tf.shape(qs)[0]
+  result = tf.TensorArray(dtype=vs.dtype, size=l)
+  sums = tf.zeros(
+      [tf.shape(ks)[1],
+       tf.shape(ks)[2],
+       tf.shape(ks)[3],
+       tf.shape(vs)[3]],
+      dtype=ks.dtype)
+
+  for index in tf.range(l):
+    sums = sums + tf.einsum("ijk,ijl->ijkl", ks[index], vs[index])
+    result = result.write(index, tf.einsum("ijkl,ijk->ijl", sums, qs[index]))
+
+  return result.stack(), sums
+
+
+@tf.function
+def _causal_numerator_bwd(res_grad, qs, ks, vs, sums):
+  l = tf.shape(qs)[0]
+  q_grads = tf.TensorArray(dtype=qs.dtype, size=l)
+  k_grads = tf.TensorArray(dtype=ks.dtype, size=l)
+  v_grads = tf.TensorArray(dtype=vs.dtype, size=l)
+
+  grads = tf.zeros(
+      [tf.shape(qs)[1],
+       tf.shape(qs)[2],
+       tf.shape(qs)[3],
+       tf.shape(vs)[3]],
+      dtype=qs.dtype)
+  gr_sums = sums
+
+  for index in tf.range(l - 1, -1, -1):
+    q_grads = q_grads.write(
+        index, tf.einsum("ijkl,ijl->ijk", gr_sums, res_grad[index]))
+    grads = grads + tf.einsum("ijk,ijl->ijkl", qs[index], res_grad[index])
+    k_grads = k_grads.write(index, tf.einsum("ijkl,ijl->ijk", grads,
+                                            vs[index]))
+    v_grads = v_grads.write(index, tf.einsum("ijkl,ijk->ijl", grads,
+                                            ks[index]))
+    gr_sums = gr_sums - tf.einsum("ijk,ijl->ijkl", ks[index], vs[index])
+
+  return q_grads.stack(), k_grads.stack(), v_grads.stack()
 
 
 @tf.custom_gradient
@@ -235,42 +280,44 @@ def causal_numerator(qs, ks, vs):
   Returns:
     Not-normalized FAVOR causal attention A_{masked}V.
   """
-
-  result = []
-  sums = tf.zeros_like(tf.einsum("ijk,ijl->ijkl", ks[0], vs[0]))
-
-  for index in range(qs.shape[0]):
-    sums = sums + tf.einsum("ijk,ijl->ijkl", ks[index], vs[index])
-    result.append(tf.einsum("ijkl,ijk->ijl", sums, qs[index])[None, Ellipsis])
-
-  result = tf.concat(result, axis=0)
+  result_tensor, sums = _causal_numerator_fwd(qs, ks, vs)
 
   def grad(res_grad):
+    return _causal_numerator_bwd(res_grad, qs, ks, vs, sums)
 
-    grads = tf.zeros_like(tf.einsum("ijk,ijl->ijkl", ks[0], vs[0]))
+  return result_tensor, grad
 
-    gr_sums = sums
 
-    q_grads = []
-    k_grads = []
-    v_grads = []
+@tf.function
+def _causal_denominator_fwd(qs, ks):
+  l = tf.shape(qs)[0]
+  result = tf.TensorArray(dtype=qs.dtype, size=l)
+  sums = tf.zeros_like(ks[0])
 
-    for index in range(qs.shape[0] - 1, -1, -1):
+  for index in tf.range(l):
+    sums = sums + ks[index]
+    result = result.write(index, tf.reduce_sum(qs[index] * sums, axis=2))
 
-      q_grads.append(
-          tf.einsum("ijkl,ijl->ijk", gr_sums, res_grad[index])[None, Ellipsis])
-      grads = grads + tf.einsum("ijk,ijl->ijkl", qs[index], res_grad[index])
-      k_grads.append(tf.einsum("ijkl,ijl->ijk", grads, vs[index])[None, Ellipsis])
-      v_grads.append(tf.einsum("ijkl,ijk->ijl", grads, ks[index])[None, Ellipsis])
-      gr_sums = gr_sums - tf.einsum("ijk,ijl->ijkl", ks[index], vs[index])
+  return result.stack(), sums
 
-    q_grads = tf.concat(q_grads[::-1], axis=0)
-    k_grads = tf.concat(k_grads[::-1], axis=0)
-    v_grads = tf.concat(v_grads[::-1], axis=0)
 
-    return q_grads, k_grads, v_grads
+@tf.function
+def _causal_denominator_bwd(res_grad, qs, ks, sums):
+  l = tf.shape(qs)[0]
+  k_grad_accum = tf.zeros_like(ks[0])
+  gr_sums = sums
+  q_grads = tf.TensorArray(dtype=qs.dtype, size=l)
+  k_grads = tf.TensorArray(dtype=ks.dtype, size=l)
 
-  return result, grad
+  for index in tf.range(l - 1, -1, -1):
+    q_grads = q_grads.write(
+        index, tf.einsum("ijk,ij->ijk", gr_sums, res_grad[index]))
+    k_grad_accum = k_grad_accum + tf.einsum("ijk,ij->ijk", qs[index],
+                                           res_grad[index])
+    k_grads = k_grads.write(index, k_grad_accum)
+    gr_sums = gr_sums - ks[index]
+
+  return q_grads.stack(), k_grads.stack()
 
 
 @tf.custom_gradient
@@ -284,39 +331,12 @@ def causal_denominator(qs, ks):
   Returns:
     FAVOR normalizer in causal attention.
   """
-
-  result = []
-  sums = tf.zeros_like(ks[0])
-
-  for index in range(qs.shape[0]):
-    sums = sums + ks[index]
-    result.append(tf.reduce_sum(qs[index] * sums, axis=2)[None, Ellipsis])
-
-  result = tf.concat(result, axis=0)
+  result_tensor, sums = _causal_denominator_fwd(qs, ks)
 
   def grad(res_grad):
+    return _causal_denominator_bwd(res_grad, qs, ks, sums)
 
-    k_grad = tf.zeros_like(ks[0])
-
-    gr_sums = sums
-
-    q_grads = []
-    k_grads = []
-
-    for index in range(qs.shape[0] - 1, -1, -1):
-
-      q_grads.append(
-          tf.einsum("ijk,ij->ijk", gr_sums, res_grad[index])[None, Ellipsis])
-      k_grad = k_grad + tf.einsum("ijk,ij->ijk", qs[index], res_grad[index])
-      k_grads.append(k_grad[None, Ellipsis])
-      gr_sums = gr_sums - ks[index]
-
-    q_grads = tf.concat(q_grads[::-1], axis=0)
-    k_grads = tf.concat(k_grads[::-1], axis=0)
-
-    return q_grads, k_grads
-
-  return result, grad
+  return result_tensor, grad
 
 
 def favor_attention(query,
@@ -410,7 +430,8 @@ class Attention(tf.keras.layers.Layer):
       limit = math.sqrt(6.0 / (fan_in + fan_out))
       return tf.keras.initializers.RandomUniform(minval=-limit, maxval=limit)
 
-    attention_initializer = _glorot_initializer(input_shape.as_list()[-1],
+    input_shape = tf.TensorShape(input_shape)
+    attention_initializer = _glorot_initializer(input_shape[-1],
                                                 self.hidden_size)
     self.query_dense_layer = util.DenseEinsum(
         output_shape=(self.num_heads, size_per_head),
@@ -491,12 +512,12 @@ class Attention(tf.keras.layers.Layer):
     if cache is not None:
       # Combine cached keys and values with new keys and values.
       if decode_loop_step is not None:
-        cache_k_shape = cache["k"].shape.as_list()
+        cache_k_shape = tf.shape(cache["k"])
         indices = tf.reshape(
             tf.one_hot(decode_loop_step, cache_k_shape[1], dtype=key.dtype),
             [1, cache_k_shape[1], 1, 1])
         key = cache["k"] + key * indices
-        cache_v_shape = cache["v"].shape.as_list()
+        cache_v_shape = tf.shape(cache["v"])
         indices = tf.reshape(
             tf.one_hot(decode_loop_step, cache_v_shape[1], dtype=value.dtype),
             [1, cache_v_shape[1], 1, 1])

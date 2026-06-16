@@ -138,7 +138,7 @@ class DenseEinsum(tf.keras.layers.Layer):
         input_shape[free_input_dims:].concatenate(self._output_shape))
 
     self._kernel = self.add_weight(
-        "kernel",
+        name="kernel",
         shape=self._kernel_shape,
         initializer=self._kernel_initializer,
         regularizer=self._kernel_regularizer,
@@ -147,7 +147,7 @@ class DenseEinsum(tf.keras.layers.Layer):
         trainable=True)
     if self._use_bias:
       self._bias = self.add_weight(
-          "bias",
+          name="bias",
           shape=self._output_shape,
           initializer=self._bias_initializer,
           regularizer=self._bias_regularizer,
