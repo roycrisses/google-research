@@ -35,6 +35,7 @@ from __future__ import division
 from __future__ import print_function
 
 import collections
+import itertools
 import re
 
 from absl import logging
@@ -177,10 +178,9 @@ def _create_ngrams(tokens, n):
     A dictionary mapping each bigram to the number of occurrences.
   """
 
-  ngrams = collections.Counter()
-  for ngram in (tuple(tokens[i:i + n]) for i in range(len(tokens) - n + 1)):
-    ngrams[ngram] += 1
-  return ngrams
+  # Optimized: Use zip and islice for efficient n-gram creation.
+  return collections.Counter(
+      zip(*(itertools.islice(tokens, i, None) for i in range(n))))
 
 
 def _score_lcs(target_tokens, prediction_tokens):
@@ -215,12 +215,17 @@ def _lcs_table(ref, can):
   rows = len(ref)
   cols = len(can)
   lcs_table = [[0] * (cols + 1) for _ in range(rows + 1)]
-  for i in range(1, rows + 1):
-    ref_i = ref[i - 1]
+  # Optimized: Use set membership to skip inner loop for non-matching tokens
+  # and reuse previous row references.
+  can_set = set(can)
+  for i, ref_i in enumerate(ref, 1):
+    if ref_i not in can_set:
+      lcs_table[i] = lcs_table[i - 1]
+      continue
     row_i = lcs_table[i]
     row_prev = lcs_table[i - 1]
-    for j in range(1, cols + 1):
-      if ref_i == can[j - 1]:
+    for j, can_j in enumerate(can, 1):
+      if ref_i == can_j:
         row_i[j] = row_prev[j - 1] + 1
       else:
         v1 = row_prev[j]
@@ -234,17 +239,19 @@ def _lcs_length(ref, can):
   if len(ref) < len(can):
     ref, can = can, ref
 
-  rows = len(ref)
   cols = len(can)
   # prev_row[j] is lcs_table[i-1][j]
   # curr_row[j] is lcs_table[i][j]
   prev_row = [0] * (cols + 1)
   curr_row = [0] * (cols + 1)
+  # Optimized: Use set membership to skip inner loop for non-matching tokens.
+  can_set = set(can)
 
-  for i in range(1, rows + 1):
-    ref_i = ref[i - 1]
-    for j in range(1, cols + 1):
-      if ref_i == can[j - 1]:
+  for ref_i in ref:
+    if ref_i not in can_set:
+      continue
+    for j, can_j in enumerate(can, 1):
+      if ref_i == can_j:
         curr_row[j] = prev_row[j - 1] + 1
       else:
         v1 = prev_row[j]
