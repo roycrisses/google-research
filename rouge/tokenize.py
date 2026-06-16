@@ -28,10 +28,6 @@ NON_ALPHANUM_PATTERN = r"[^a-z0-9]+"
 NON_ALPHANUM_RE = re.compile(NON_ALPHANUM_PATTERN)
 SPACES_PATTERN = r"\s+"
 SPACES_RE = re.compile(SPACES_PATTERN)
-VALID_TOKEN_PATTERN = r"^[a-z0-9]+$"
-VALID_TOKEN_RE = re.compile(VALID_TOKEN_PATTERN)
-
-
 def tokenize(text, stemmer):
   """Tokenize input text into a list of tokens.
 
@@ -58,6 +54,6 @@ def tokenize(text, stemmer):
               for x in tokens]
 
   # One final check to drop any empty or invalid tokens.
-  tokens = [x for x in tokens if VALID_TOKEN_RE.match(x)]
+  tokens = [x for x in tokens if x]
 
   return tokens

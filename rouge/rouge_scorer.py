@@ -35,6 +35,7 @@ from __future__ import division
 from __future__ import print_function
 
 import collections
+import itertools
 import re
 
 from absl import logging
@@ -177,10 +178,8 @@ def _create_ngrams(tokens, n):
     A dictionary mapping each bigram to the number of occurrences.
   """
 
-  ngrams = collections.Counter()
-  for ngram in (tuple(tokens[i:i + n]) for i in range(len(tokens) - n + 1)):
-    ngrams[ngram] += 1
-  return ngrams
+  return collections.Counter(
+      six.moves.zip(*(itertools.islice(tokens, i, None) for i in range(n))))
 
 
 def _score_lcs(target_tokens, prediction_tokens):
@@ -214,13 +213,18 @@ def _lcs_table(ref, can):
   """Create 2-d LCS score table."""
   rows = len(ref)
   cols = len(can)
+  can_set = set(can)
   lcs_table = [[0] * (cols + 1) for _ in range(rows + 1)]
   for i in range(1, rows + 1):
     ref_i = ref[i - 1]
+    if ref_i not in can_set:
+      lcs_table[i] = lcs_table[i - 1]
+      continue
+
     row_i = lcs_table[i]
     row_prev = lcs_table[i - 1]
-    for j in range(1, cols + 1):
-      if ref_i == can[j - 1]:
+    for j, can_j in enumerate(can, 1):
+      if ref_i == can_j:
         row_i[j] = row_prev[j - 1] + 1
       else:
         v1 = row_prev[j]
@@ -236,23 +240,25 @@ def _lcs_length(ref, can):
 
   rows = len(ref)
   cols = len(can)
-  # prev_row[j] is lcs_table[i-1][j]
-  # curr_row[j] is lcs_table[i][j]
-  prev_row = [0] * (cols + 1)
-  curr_row = [0] * (cols + 1)
+  can_set = set(can)
+  # dp[j] is lcs_table[i][j]
+  dp = [0] * (cols + 1)
 
-  for i in range(1, rows + 1):
-    ref_i = ref[i - 1]
-    for j in range(1, cols + 1):
-      if ref_i == can[j - 1]:
-        curr_row[j] = prev_row[j - 1] + 1
+  for ref_i in ref:
+    if ref_i not in can_set:
+      continue
+    prev_diag = 0
+    for j, can_j in enumerate(can, 1):
+      tmp = dp[j]
+      if ref_i == can_j:
+        dp[j] = prev_diag + 1
       else:
-        v1 = prev_row[j]
-        v2 = curr_row[j - 1]
-        curr_row[j] = v1 if v1 >= v2 else v2
-    prev_row, curr_row = curr_row, prev_row
+        v1 = dp[j]
+        v2 = dp[j - 1]
+        dp[j] = v1 if v1 >= v2 else v2
+      prev_diag = tmp
 
-  return prev_row[cols]
+  return dp[cols]
 
 
 def _backtrack_norec(t, ref, can):
