@@ -57,7 +57,9 @@ def tokenize(text, stemmer):
     tokens = [six.ensure_str(stemmer.stem(x)) if len(x) > 3 else x
               for x in tokens]
 
-  # One final check to drop any empty or invalid tokens.
-  tokens = [x for x in tokens if VALID_TOKEN_RE.match(x)]
+  # One final check to drop any empty tokens.
+  # The preceding steps (lower, NON_ALPHANUM_RE.sub, SPACES_RE.split)
+  # ensure that tokens only contain alphanumeric characters or are empty.
+  tokens = [x for x in tokens if x]
 
   return tokens
