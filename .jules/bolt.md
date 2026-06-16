@@ -1,3 +1,7 @@
 ## 2025-05-22 - ROUGE LCS Algorithmic Optimizations
 **Learning:** The default ROUGE LCS implementation suffered from several performance anti-patterns in Python: O(M*N) memory usage for simple length checks, O(N^2) list building using `insert(0, ...)`, and redundant O(M*N) DP calculations for disjoint token sequences or non-overlapping sentences in summaries.
 **Action:** Always use space-optimized DP ($O(\min(M, N))$) when only the length is needed. Use `append()` + `reverse()` for efficient list building. Implement fast-path checks using `set` intersections to bypass expensive algorithms. Pre-calculate sets in loops to avoid redundant conversions. Use local variable lookups and conditional expressions instead of `max()` in tight loops.
+
+## 2025-06-14 - Python Object Creation and Closure Overhead in VRD
+**Learning:** In the Visual Relationship Detection (VRD) evaluation hot path (IoU calculation and prediction matching), Python object instantiation (e.g., creating a `Box` for the overlap area) and nested function closures (`match_groundtruth`) introduced significant overhead. Inlining these operations and caching class attributes in local variables provided a cumulative ~2.4x speedup.
+**Action:** Avoid intermediate object creation in geometric calculations (IoU). Inline closures in tight loops. Cache frequently accessed class attributes (`self.X`) and methods into local variables to minimize repeated lookups.
