@@ -88,6 +88,8 @@ class CBertScorer(object):
     assert all(len(r.strip()) for r in references), 'Empty reference sentence.'
 
     n_examples = len(candidates)
+    if n_examples == 0:
+      return collections.defaultdict(list)
 
     all_text = candidates + references
     print('About to get activations...')
@@ -97,6 +99,12 @@ class CBertScorer(object):
     all_cand_tokens = tokens[:n_examples]
     all_ref_tokens = tokens[-n_examples:]
 
+    all_cand_embeddings = layers[:n_examples]
+    all_ref_embeddings = layers[-n_examples:]
+
+    # Get the layer numbers once.
+    layer_numbers = [int(k) for k in all_ref_embeddings[0].keys()]
+
     scores = collections.defaultdict(list)
 
     for example_idx in range(n_examples):
@@ -104,12 +112,6 @@ class CBertScorer(object):
       # every sentence starts and ends with [CLS] and [SEP] tokens.
       cand_tokens = all_cand_tokens[example_idx][1:-1]
       ref_tokens = all_ref_tokens[example_idx][1:-1]
-
-      if self.medical_tokens:
-        # Only care about these words.
-        idfs = {}
-        for token in np.concatenate([cand_tokens, ref_tokens], axis=0):
-          idfs[token] = 1 if token in self.medical_tokens else 0
 
       # pylint: disable=g-explicit-length-test
       if (skip_empty_sentences_after_tokenization and
@@ -133,10 +135,12 @@ class CBertScorer(object):
                           all_ref_tokens[example_idx]))
       # pylint: enable=g-explicit-length-test
 
-      all_cand_embeddings = layers[:n_examples]
-      all_ref_embeddings = layers[-n_examples:]
-
-      layer_numbers = [int(k) for k in all_ref_embeddings[0].keys()]
+      if self.medical_tokens:
+        # Vectorized weights for medical tokens.
+        w_cand = np.array(
+            [1 if t in self.medical_tokens else 0 for t in cand_tokens])
+        w_ref = np.array(
+            [1 if t in self.medical_tokens else 0 for t in ref_tokens])
 
       for ln in layer_numbers:
         cand_embeddings = np.vstack(all_cand_embeddings[example_idx][ln])[1:-1]
@@ -144,43 +148,31 @@ class CBertScorer(object):
 
         # Calculate cosine similarity by normalizing then dot product of all
         # pairs.
-        cand_embeddings /= np.sqrt(
-            np.square(cand_embeddings).sum(axis=1, keepdims=True))
-        ref_embeddings /= np.sqrt(
-            np.square(ref_embeddings).sum(axis=1, keepdims=True))
+        cand_embeddings /= np.linalg.norm(
+            cand_embeddings, axis=1, keepdims=True)
+        ref_embeddings /= np.linalg.norm(
+            ref_embeddings, axis=1, keepdims=True)
 
         sim_matrix = np.matmul(cand_embeddings, ref_embeddings.T)
 
-        precision = 0
-        recall = 0
-
         if self.medical_tokens:
-          idf_sum = 0
-          for cand_idx in range(len(cand_tokens)):
-            idf_val = idfs[cand_tokens[cand_idx]]
-            precision += idf_val * np.max(sim_matrix[cand_idx])
-            idf_sum += idf_val
-          if idf_sum == 0:
+          # Vectorized weighted precision/recall.
+          max_sim_cand = np.max(sim_matrix, axis=1)
+          idf_sum_cand = np.sum(w_cand)
+          if idf_sum_cand == 0:
             precision = np.nan
           else:
-            precision /= idf_sum
+            precision = np.sum(w_cand * max_sim_cand) / idf_sum_cand
 
-          idf_sum = 0
-          for ref_idx in range(len(ref_tokens)):
-            idf_val = idfs[ref_tokens[ref_idx]]
-            recall += idf_val * np.max(sim_matrix[:, ref_idx])
-
-            idf_sum += idf_val
-          if idf_sum == 0:
+          max_sim_ref = np.max(sim_matrix, axis=0)
+          idf_sum_ref = np.sum(w_ref)
+          if idf_sum_ref == 0:
             recall = np.nan
           else:
-            recall /= idf_sum
+            recall = np.sum(w_ref * max_sim_ref) / idf_sum_ref
         else:
-          precision = np.sum(np.max(sim_matrix, axis=1))
-          precision /= len(cand_tokens)
-
-          recall = np.sum(np.max(sim_matrix, axis=0))
-          recall /= len(ref_tokens)
+          precision = np.mean(np.max(sim_matrix, axis=1))
+          recall = np.mean(np.max(sim_matrix, axis=0))
 
         if precision == 0 and recall == 0:
           f_score = 0
