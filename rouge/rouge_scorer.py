@@ -35,6 +35,7 @@ from __future__ import division
 from __future__ import print_function
 
 import collections
+import functools
 import re
 
 from absl import logging
@@ -219,8 +220,8 @@ def _lcs_table(ref, can):
     ref_i = ref[i - 1]
     row_i = lcs_table[i]
     row_prev = lcs_table[i - 1]
-    for j in range(1, cols + 1):
-      if ref_i == can[j - 1]:
+    for j, can_j_1 in enumerate(can, 1):
+      if ref_i == can_j_1:
         row_i[j] = row_prev[j - 1] + 1
       else:
         v1 = row_prev[j]
@@ -241,10 +242,9 @@ def _lcs_length(ref, can):
   prev_row = [0] * (cols + 1)
   curr_row = [0] * (cols + 1)
 
-  for i in range(1, rows + 1):
-    ref_i = ref[i - 1]
-    for j in range(1, cols + 1):
-      if ref_i == can[j - 1]:
+  for ref_i in ref:
+    for j, can_j in enumerate(can, 1):
+      if ref_i == can_j:
         curr_row[j] = prev_row[j - 1] + 1
       else:
         v1 = prev_row[j]
@@ -301,10 +301,12 @@ def _summary_level_lcs(ref_sent, can_sent):
     token_cnts_c.update(s)
 
   can_sets = [set(s) for s in can_sent]
+  ref_sets = [set(s) for s in ref_sent]
 
   hits = 0
-  for r in ref_sent:
-    r_set = set(r)
+  for r, r_set in zip(ref_sent, ref_sets):
+    if not r_set:
+      continue
     # Only keep candidate sentences that share at least one token with r.
     reduced_can_sent = [
         can_sent[i] for i, s_set in enumerate(can_sets) if r_set & s_set
@@ -346,10 +348,16 @@ def _find_union(lcs_list):
   return sorted(list(set().union(*lcs_list)))
 
 
-def lcs_ind(ref, can):
+@functools.lru_cache(maxsize=10240)
+def _lcs_ind_cached(ref, can):
   """Returns one of the longest lcs."""
   t = _lcs_table(ref, can)
-  return _backtrack_norec(t, ref, can)
+  return tuple(_backtrack_norec(t, ref, can))
+
+
+def lcs_ind(ref, can):
+  """Returns one of the longest lcs."""
+  return list(_lcs_ind_cached(tuple(ref), tuple(can)))
 
 
 def _score_ngrams(target_ngrams, prediction_ngrams):
