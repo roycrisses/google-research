@@ -97,6 +97,14 @@ class CBertScorer(object):
     all_cand_tokens = tokens[:n_examples]
     all_ref_tokens = tokens[-n_examples:]
 
+    all_cand_embeddings = layers[:n_examples]
+    all_ref_embeddings = layers[-n_examples:]
+
+    if not all_ref_embeddings:
+      return collections.defaultdict(list)
+
+    layer_numbers = [int(k) for k in all_ref_embeddings[0].keys()]
+
     scores = collections.defaultdict(list)
 
     for example_idx in range(n_examples):
@@ -105,16 +113,11 @@ class CBertScorer(object):
       cand_tokens = all_cand_tokens[example_idx][1:-1]
       ref_tokens = all_ref_tokens[example_idx][1:-1]
 
-      if self.medical_tokens:
-        # Only care about these words.
-        idfs = {}
-        for token in np.concatenate([cand_tokens, ref_tokens], axis=0):
-          idfs[token] = 1 if token in self.medical_tokens else 0
-
       # pylint: disable=g-explicit-length-test
       if (skip_empty_sentences_after_tokenization and
           (len(cand_tokens) == 0 or len(ref_tokens) == 0)):
-        scores[-1] = [CBERTScore(precision=-1, recall=-1, f_score=-1)]
+        for ln in layer_numbers:
+          scores[ln].append(CBERTScore(precision=-1, recall=-1, f_score=-1))
         continue
 
       if len(cand_tokens) == 0:
@@ -133,10 +136,14 @@ class CBertScorer(object):
                           all_ref_tokens[example_idx]))
       # pylint: enable=g-explicit-length-test
 
-      all_cand_embeddings = layers[:n_examples]
-      all_ref_embeddings = layers[-n_examples:]
-
-      layer_numbers = [int(k) for k in all_ref_embeddings[0].keys()]
+      if self.medical_tokens:
+        # Only care about these words.
+        cand_idf = np.array([1 if t in self.medical_tokens else 0
+                             for t in cand_tokens])
+        ref_idf = np.array([1 if t in self.medical_tokens else 0
+                            for t in ref_tokens])
+        cand_idf_sum = np.sum(cand_idf)
+        ref_idf_sum = np.sum(ref_idf)
 
       for ln in layer_numbers:
         cand_embeddings = np.vstack(all_cand_embeddings[example_idx][ln])[1:-1]
@@ -151,38 +158,21 @@ class CBertScorer(object):
 
         sim_matrix = np.matmul(cand_embeddings, ref_embeddings.T)
 
-        precision = 0
-        recall = 0
-
         if self.medical_tokens:
-          idf_sum = 0
-          for cand_idx in range(len(cand_tokens)):
-            idf_val = idfs[cand_tokens[cand_idx]]
-            precision += idf_val * np.max(sim_matrix[cand_idx])
-            idf_sum += idf_val
-          if idf_sum == 0:
+          if cand_idf_sum == 0:
             precision = np.nan
           else:
-            precision /= idf_sum
+            precision = np.sum(cand_idf * np.max(sim_matrix, axis=1)) / cand_idf_sum
 
-          idf_sum = 0
-          for ref_idx in range(len(ref_tokens)):
-            idf_val = idfs[ref_tokens[ref_idx]]
-            recall += idf_val * np.max(sim_matrix[:, ref_idx])
-
-            idf_sum += idf_val
-          if idf_sum == 0:
+          if ref_idf_sum == 0:
             recall = np.nan
           else:
-            recall /= idf_sum
+            recall = np.sum(ref_idf * np.max(sim_matrix, axis=0)) / ref_idf_sum
         else:
-          precision = np.sum(np.max(sim_matrix, axis=1))
-          precision /= len(cand_tokens)
+          precision = np.sum(np.max(sim_matrix, axis=1)) / len(cand_tokens)
+          recall = np.sum(np.max(sim_matrix, axis=0)) / len(ref_tokens)
 
-          recall = np.sum(np.max(sim_matrix, axis=0))
-          recall /= len(ref_tokens)
-
-        if precision == 0 and recall == 0:
+        if (precision == 0 and recall == 0) or np.isnan(precision) or np.isnan(recall):
           f_score = 0
         else:
           f_score = 2 * precision * recall / (precision + recall)
