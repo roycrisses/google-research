@@ -1,3 +1,7 @@
 ## 2025-05-22 - ROUGE LCS Algorithmic Optimizations
 **Learning:** The default ROUGE LCS implementation suffered from several performance anti-patterns in Python: O(M*N) memory usage for simple length checks, O(N^2) list building using `insert(0, ...)`, and redundant O(M*N) DP calculations for disjoint token sequences or non-overlapping sentences in summaries.
 **Action:** Always use space-optimized DP ($O(\min(M, N))$) when only the length is needed. Use `append()` + `reverse()` for efficient list building. Implement fast-path checks using `set` intersections to bypass expensive algorithms. Pre-calculate sets in loops to avoid redundant conversions. Use local variable lookups and conditional expressions instead of `max()` in tight loops.
+
+## 2025-06-10 - JAX Einsum vs Nested Matmul Optimization
+**Learning:** In JAX/XLA, `jnp.einsum` for certain patterns (like applying matrices to different dimensions of a tensor) can be slower than explicit nested `jnp.matmul` calls. This is because `matmul` lowers more directly to highly optimized HLO `Dot` operations that XLA can more easily fuse and optimize, whereas `einsum` strings may sometimes result in less efficient lowering or missed fusion opportunities.
+**Action:** Prefer nested `jnp.matmul` over complex `jnp.einsum` for chained matrix multiplications where dimensions allow (e.g., using broadcasting for batch/sequence dimensions). In this codebase, the pattern `einsum("bij,jk,ni->bnk", inputs, m_hidden, m_seq)` is ~1.3x faster when written as `matmul(m_seq, matmul(inputs, m_hidden))`.
