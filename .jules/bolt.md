@@ -1,3 +1,7 @@
 ## 2025-05-22 - ROUGE LCS Algorithmic Optimizations
 **Learning:** The default ROUGE LCS implementation suffered from several performance anti-patterns in Python: O(M*N) memory usage for simple length checks, O(N^2) list building using `insert(0, ...)`, and redundant O(M*N) DP calculations for disjoint token sequences or non-overlapping sentences in summaries.
 **Action:** Always use space-optimized DP ($O(\min(M, N))$) when only the length is needed. Use `append()` + `reverse()` for efficient list building. Implement fast-path checks using `set` intersections to bypass expensive algorithms. Pre-calculate sets in loops to avoid redundant conversions. Use local variable lookups and conditional expressions instead of `max()` in tight loops.
+
+## 2025-05-23 - BERTScore Vectorization and Looping Optimizations
+**Learning:** Performance in metrics like BERTScore is often degraded by nested Python loops and redundant slicing. Hoisting (N)$ slicing and constant lookups out of example loops, and replacing token-level Python loops with NumPy vectorization (like `np.dot` for weighted sums), provides significant speedups.
+**Action:** Always hoist invariant list slicing and dictionary lookups out of loops. Use NumPy vectorized operations (`np.mean`, `np.dot`, `np.max(axis=...)`) to replace manual iteration over sequence tokens. Ensure consistent error handling for empty inputs across all return structures.
