@@ -1,3 +1,7 @@
 ## 2025-05-22 - ROUGE LCS Algorithmic Optimizations
 **Learning:** The default ROUGE LCS implementation suffered from several performance anti-patterns in Python: O(M*N) memory usage for simple length checks, O(N^2) list building using `insert(0, ...)`, and redundant O(M*N) DP calculations for disjoint token sequences or non-overlapping sentences in summaries.
 **Action:** Always use space-optimized DP ($O(\min(M, N))$) when only the length is needed. Use `append()` + `reverse()` for efficient list building. Implement fast-path checks using `set` intersections to bypass expensive algorithms. Pre-calculate sets in loops to avoid redundant conversions. Use local variable lookups and conditional expressions instead of `max()` in tight loops.
+
+## 2025-05-26 - JAX Native Broadcasting vs Manual Tiling
+**Learning:** Manually broadcasting or tiling tensors in JAX (e.g., creating "thick" random matrices by adding zeros) is a significant performance anti-pattern. It leads to unnecessary memory allocation of (Batch \times Seq \times Features)$ instead of (Features)$. JAX primitives like `lax.dot_general` and `jnp.sum` handle broadcasting and reductions far more efficiently without materializing large intermediate tensors.
+**Action:** Leverage native JAX broadcasting in `lax.dot_general` by ensuring batch dimensions are treated as "remaining" dimensions rather than being explicitly tiled and contracted. Prefer specialized reduction primitives like `jnp.sum` over matrix multiplication with all-ones tensors.
