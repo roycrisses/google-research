@@ -58,6 +58,9 @@ def tokenize(text, stemmer):
               for x in tokens]
 
   # One final check to drop any empty or invalid tokens.
-  tokens = [x for x in tokens if VALID_TOKEN_RE.match(x)]
+  # This is a significant performance bottleneck. Since we have already
+  # replaced non-alphanumeric characters with spaces and split on spaces,
+  # any non-empty token is guaranteed to be alphanumeric.
+  tokens = [x for x in tokens if x]
 
   return tokens
