@@ -38,18 +38,19 @@ def center(cost, f, g):
 
 def _log_marginal(cost, f, g, eps, axis):
   """Computes the log of the marginals of the transport matrix."""
+  inv_eps = 1.0 / eps
   if axis == 1:  # marginal over the second dimension (b)
     if f.shape.rank == 2:
-      return (g + eps * tf.reduce_logsumexp(
-          (f[:, :, tf.newaxis] - cost) / eps, axis=1)) / eps
-    return (g + eps * tf.reduce_logsumexp(
-        (f[:, :, tf.newaxis, :] - cost[:, :, :, tf.newaxis]) / eps, axis=1)) / eps
+      return g * inv_eps + tf.reduce_logsumexp(
+          (f[:, :, tf.newaxis] - cost) * inv_eps, axis=1)
+    return g * inv_eps + tf.reduce_logsumexp(
+        (f[:, :, tf.newaxis, :] - cost[:, :, :, tf.newaxis]) * inv_eps, axis=1)
 
   if f.shape.rank == 2:
-    return (f + eps * tf.reduce_logsumexp(
-        (g[:, tf.newaxis, :] - cost) / eps, axis=2)) / eps
-  return (f + eps * tf.reduce_logsumexp(
-      (g[:, tf.newaxis, :, :] - cost[:, :, :, tf.newaxis]) / eps, axis=2)) / eps
+    return f * inv_eps + tf.reduce_logsumexp(
+        (g[:, tf.newaxis, :] - cost) * inv_eps, axis=2)
+  return f * inv_eps + tf.reduce_logsumexp(
+      (g[:, tf.newaxis, :, :] - cost[:, :, :, tf.newaxis]) * inv_eps, axis=2)
 
 
 def softmin(cost, f, g, eps, axis):
@@ -58,8 +59,7 @@ def softmin(cost, f, g, eps, axis):
 
 def error(cost, f, g, eps, b):
   log_b_target = _log_marginal(cost, f, g, eps, axis=1)
-  b_target = tf.exp(log_b_target)
-  return tf.reduce_max(tf.abs(b_target - b) / b)
+  return tf.reduce_max(tf.abs(tf.exp(log_b_target - tf.math.log(b)) - 1.0))
 
 
 def transport(cost, f, g, eps):
@@ -77,19 +77,22 @@ def cost_fn(x, y,
       cost = tf.math.abs(xy_difference)
       derivative = tf.math.sign(xy_difference)
     elif power == 2.0:
-      cost = xy_difference**2.0
+      cost = tf.math.square(xy_difference)
       derivative = 2.0 * xy_difference
     else:
       abs_diff = tf.math.abs(xy_difference)
-      cost = abs_diff**power
-      derivative = power * tf.math.sign(xy_difference) * abs_diff**(power - 1.0)
+      cost = tf.math.pow(abs_diff, power)
+      derivative = power * tf.math.sign(xy_difference) * tf.math.pow(
+          abs_diff, power - 1.0)
     return cost, derivative
   # Otherwise data is high dimensional, in form [batch,n,d]. L2 distance used.
   elif x.shape.rank == 3 and y.shape.rank == 3:
-    x2 = tf.reduce_sum(x**2, axis=2)
-    y2 = tf.reduce_sum(y**2, axis=2)
+    x2 = tf.reduce_sum(tf.math.square(x), axis=2)
+    y2 = tf.reduce_sum(tf.math.square(y), axis=2)
     cost = (x2[:, :, tf.newaxis] + y2[:, tf.newaxis, :] -
-            tf.matmul(x, y, transpose_b=True))**(power / 2)
+            tf.matmul(x, y, transpose_b=True))
+    if power != 2.0:
+      cost = tf.math.pow(cost, power / 2.0)
     derivative = None
     return cost, derivative
 
@@ -139,18 +142,26 @@ def sinkhorn_iterations(x,
   cost, d_cost = cost_fn(x, y, power)
 
   def body_fn(f, g, eps, num_iter):
-    for _ in range(inner_num_iter):
-      if f.shape.rank == 2:
-        g = eps * logb - eps * tf.reduce_logsumexp(
-            (f[:, :, tf.newaxis] - cost) / eps, axis=1)
-        f = eps * loga - eps * tf.reduce_logsumexp(
-            (g[:, tf.newaxis, :] - cost) / eps, axis=2)
-      else:
-        g = eps * logb - eps * tf.reduce_logsumexp(
-            (f[:, :, tf.newaxis, :] - cost[:, :, :, tf.newaxis]) / eps, axis=1)
-        f = eps * loga - eps * tf.reduce_logsumexp(
-            (g[:, tf.newaxis, :, :] - cost[:, :, :, tf.newaxis]) / eps, axis=2)
-      eps = tf.math.maximum(eps * epsilon_decay, epsilon)
+    is_rank_2 = f.shape.rank == 2
+    if is_rank_2:
+      for _ in range(inner_num_iter):
+        inv_eps = 1.0 / eps
+        cost_eps = cost * inv_eps
+        g = eps * (logb - tf.reduce_logsumexp(
+            f[:, :, tf.newaxis] * inv_eps - cost_eps, axis=1))
+        f = eps * (loga - tf.reduce_logsumexp(
+            g[:, tf.newaxis, :] * inv_eps - cost_eps, axis=2))
+        eps = tf.math.maximum(eps * epsilon_decay, epsilon)
+    else:
+      cost_expand = cost[:, :, :, tf.newaxis]
+      for _ in range(inner_num_iter):
+        inv_eps = 1.0 / eps
+        cost_eps = cost_expand * inv_eps
+        g = eps * (logb - tf.reduce_logsumexp(
+            f[:, :, tf.newaxis, :] * inv_eps - cost_eps, axis=1))
+        f = eps * (loga - tf.reduce_logsumexp(
+            g[:, tf.newaxis, :, :] * inv_eps - cost_eps, axis=2))
+        eps = tf.math.maximum(eps * epsilon_decay, epsilon)
     return [f, g, eps, num_iter + inner_num_iter]
 
   def cond_fn(f, g, eps, num_iter):
