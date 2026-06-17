@@ -97,7 +97,15 @@ class CBertScorer(object):
     all_cand_tokens = tokens[:n_examples]
     all_ref_tokens = tokens[-n_examples:]
 
+    all_cand_embeddings = layers[:n_examples]
+    all_ref_embeddings = layers[-n_examples:]
+
     scores = collections.defaultdict(list)
+
+    if n_examples == 0:
+      return scores
+
+    layer_numbers = [int(k) for k in all_ref_embeddings[0].keys()]
 
     for example_idx in range(n_examples):
       # Ignore the first and last tokens when cheking similarity because
@@ -106,10 +114,11 @@ class CBertScorer(object):
       ref_tokens = all_ref_tokens[example_idx][1:-1]
 
       if self.medical_tokens:
-        # Only care about these words.
-        idfs = {}
-        for token in np.concatenate([cand_tokens, ref_tokens], axis=0):
-          idfs[token] = 1 if token in self.medical_tokens else 0
+        # Vectorize IDF creation for Medical Mode.
+        idfs_cand = np.array(
+            [1 if t in self.medical_tokens else 0 for t in cand_tokens])
+        idfs_ref = np.array(
+            [1 if t in self.medical_tokens else 0 for t in ref_tokens])
 
       # pylint: disable=g-explicit-length-test
       if (skip_empty_sentences_after_tokenization and
@@ -133,57 +142,42 @@ class CBertScorer(object):
                           all_ref_tokens[example_idx]))
       # pylint: enable=g-explicit-length-test
 
-      all_cand_embeddings = layers[:n_examples]
-      all_ref_embeddings = layers[-n_examples:]
-
-      layer_numbers = [int(k) for k in all_ref_embeddings[0].keys()]
-
       for ln in layer_numbers:
         cand_embeddings = np.vstack(all_cand_embeddings[example_idx][ln])[1:-1]
         ref_embeddings = np.vstack(all_ref_embeddings[example_idx][ln])[1:-1]
 
         # Calculate cosine similarity by normalizing then dot product of all
-        # pairs.
-        cand_embeddings /= np.sqrt(
-            np.square(cand_embeddings).sum(axis=1, keepdims=True))
-        ref_embeddings /= np.sqrt(
-            np.square(ref_embeddings).sum(axis=1, keepdims=True))
+        # pairs. Using np.linalg.norm for cleaner implementation.
+        cand_embeddings /= np.linalg.norm(
+            cand_embeddings, axis=1, keepdims=True)
+        ref_embeddings /= np.linalg.norm(
+            ref_embeddings, axis=1, keepdims=True)
 
         sim_matrix = np.matmul(cand_embeddings, ref_embeddings.T)
 
-        precision = 0
-        recall = 0
-
         if self.medical_tokens:
-          idf_sum = 0
-          for cand_idx in range(len(cand_tokens)):
-            idf_val = idfs[cand_tokens[cand_idx]]
-            precision += idf_val * np.max(sim_matrix[cand_idx])
-            idf_sum += idf_val
-          if idf_sum == 0:
+          # Vectorized Medical Mode scoring.
+          idf_cand_sum = np.sum(idfs_cand)
+          if idf_cand_sum == 0:
             precision = np.nan
           else:
-            precision /= idf_sum
+            precision = np.sum(idfs_cand * np.max(sim_matrix, axis=1))
+            precision /= idf_cand_sum
 
-          idf_sum = 0
-          for ref_idx in range(len(ref_tokens)):
-            idf_val = idfs[ref_tokens[ref_idx]]
-            recall += idf_val * np.max(sim_matrix[:, ref_idx])
-
-            idf_sum += idf_val
-          if idf_sum == 0:
+          idf_ref_sum = np.sum(idfs_ref)
+          if idf_ref_sum == 0:
             recall = np.nan
           else:
-            recall /= idf_sum
+            recall = np.sum(idfs_ref * np.max(sim_matrix, axis=0))
+            recall /= idf_ref_sum
         else:
-          precision = np.sum(np.max(sim_matrix, axis=1))
-          precision /= len(cand_tokens)
+          # Standard BERTScore aggregation using mean of max similarity.
+          precision = np.mean(np.max(sim_matrix, axis=1))
+          recall = np.mean(np.max(sim_matrix, axis=0))
 
-          recall = np.sum(np.max(sim_matrix, axis=0))
-          recall /= len(ref_tokens)
-
-        if precision == 0 and recall == 0:
-          f_score = 0
+        if (precision == 0 and recall == 0) or np.isnan(precision) or np.isnan(
+            recall):
+          f_score = 0 if not (np.isnan(precision) or np.isnan(recall)) else np.nan
         else:
           f_score = 2 * precision * recall / (precision + recall)
 
