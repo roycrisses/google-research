@@ -30,16 +30,16 @@ def sinkhorn_forward(C, mu, nu, epsilon, max_iter):
 
     bs, _, k_ = C.size()
 
-    v = torch.ones([bs, 1, k_])/(k_)
-    G = torch.exp(-C/epsilon)
-    if torch.cuda.is_available():
-        v = v.cuda()
+    # Create v on the same device as C
+    v = torch.full([bs, 1, k_], 1.0 / k_, device=C.device, dtype=C.dtype)
+    G = torch.exp(-C / epsilon)
 
     for _ in range(max_iter):
-        u = mu/(G*v).sum(-1, keepdim=True)
-        v = nu/(G*u).sum(-2, keepdim=True)
+        # Use matmul for efficiency instead of element-wise multiplication + sum
+        u = mu / torch.matmul(G, v.transpose(-1, -2))
+        v = nu / torch.matmul(u.transpose(-1, -2), G)
 
-    Gamma = u*G*v
+    Gamma = u * G * v
     return Gamma
 
 
@@ -47,62 +47,74 @@ def sinkhorn_forward_stablized(C, mu, nu, epsilon, max_iter):
     """sinkhorn forward in log space."""
 
     bs, n, k_ = C.size()
-    k = k_-1
 
-    f = torch.zeros([bs, n, 1])
-    g = torch.zeros([bs, 1, k+1])
-    if torch.cuda.is_available():
-        f = f.cuda()
-        g = g.cuda()
-    epsilon_log_mu = epsilon*torch.log(mu)
-    epsilon_log_nu = epsilon*torch.log(nu)
-    def min_epsilon_row(Z, epsilon):
-        return -epsilon*torch.logsumexp((-Z)/epsilon, -1, keepdim=True)
+    # f and g in log-space, scaled by 1/epsilon
+    f_hat = torch.zeros([bs, n, 1], device=C.device, dtype=C.dtype)
+    g_hat = torch.zeros([bs, 1, k_], device=C.device, dtype=C.dtype)
 
-    def min_epsilon_col(Z, epsilon):
-        return -epsilon*torch.logsumexp((-Z)/epsilon, -2, keepdim=True)
+    log_mu = torch.log(mu)
+    log_nu = torch.log(nu)
+    C_eps = -C / epsilon
 
     for _ in range(max_iter):
-        f = min_epsilon_row(C-g, epsilon)+epsilon_log_mu
-        g = min_epsilon_col(C-f, epsilon)+epsilon_log_nu
+        # f_hat = f/epsilon. Optimized log-space updates.
+        f_hat = -torch.logsumexp(C_eps + g_hat, dim=-1, keepdim=True) + log_mu
+        g_hat = -torch.logsumexp(C_eps + f_hat, dim=-2, keepdim=True) + log_nu
 
-    Gamma = torch.exp((-C+f+g)/epsilon)
+    Gamma = torch.exp(C_eps + f_hat + g_hat)
     return Gamma
 
 
 def sinkhorn_backward(grad_output_Gamma, Gamma, mu, nu, epsilon):
-    nu_ = nu[:,:,:-1]
-    Gamma_ = Gamma[:,:,:-1]
-
+    """
+    Standard backward of sinkhorn using Schur complement.
+    Optimized for memory and speed.
+    """
     bs, n, k_ = Gamma.size()
+    k = k_ - 1
 
-    inv_mu = 1./(mu.view([1,-1]))  #[1, n]
-    Kappa = torch.diag_embed(nu_.squeeze(-2)) \
-            -torch.matmul(Gamma_.transpose(-1, -2) * inv_mu.unsqueeze(-2), Gamma_)   #[bs, k, k]
+    # Use slices to avoid unnecessary copies
+    nu_ = nu[:, :, :k]
+    Gamma_ = Gamma[:, :, :k]
 
-    inv_Kappa = torch.inverse(Kappa) #[bs, k, k]
+    inv_mu = 1.0 / mu.view(1, -1)  # [1, n]
 
-    Gamma_mu = inv_mu.unsqueeze(-1)*Gamma_
-    L = Gamma_mu.matmul(inv_Kappa) #[bs, n, k]
-    G1 = grad_output_Gamma * Gamma #[bs, n, k+1]
+    # Pre-multiply Gamma_ by sqrt(inv_mu) for more efficient matmul if needed,
+    # but here we just optimize the existing chain.
+    Gamma_t = Gamma_.transpose(-1, -2)
+    Kappa = torch.diag_embed(nu_.squeeze(-2)) - torch.matmul(Gamma_t * inv_mu.unsqueeze(-2), Gamma_)
 
-    g1 = G1.sum(-1)
-    G21 = (g1*inv_mu).unsqueeze(-1)*Gamma  #[bs, n, k+1]
-    g1_L = g1.unsqueeze(-2).matmul(L)  #[bs, 1, k]
-    G22 = g1_L.matmul(Gamma_mu.transpose(-1,-2)).transpose(-1,-2)*Gamma  #[bs, n, k+1]
-    G23 = - F.pad(g1_L, pad=(0, 1), mode='constant', value=0)*Gamma  #[bs, n, k+1]
-    G2 = G21 + G22 + G23  #[bs, n, k+1]
+    # Optimization for k=1 (common case in TopK_custom with 2 anchors)
+    if k == 1:
+        inv_Kappa = 1.0 / Kappa
+    else:
+        inv_Kappa = torch.linalg.inv(Kappa)
 
-    del g1, G21, G22, G23, Gamma_mu
+    Gamma_mu = inv_mu.unsqueeze(-1) * Gamma_
+    L = torch.matmul(Gamma_mu, inv_Kappa)  # [bs, n, k]
 
-    g2 = G1.sum(-2).unsqueeze(-1) #[bs, k+1, 1]
-    g2 = g2[:,:-1,:]  #[bs, k, 1]
-    G31 = - L.matmul(g2)*Gamma  #[bs, n, k+1]
-    G32 = F.pad(inv_Kappa.matmul(g2).transpose(-1,-2), pad=(0, 1), mode='constant', value=0)*Gamma  #[bs, n, k+1]
-    G3 = G31 + G32  #[bs, n, k+1]
-#            del g2, G31, G32, L
+    G1 = grad_output_Gamma * Gamma  # [bs, n, k_]
+    g1 = G1.sum(-1, keepdim=True)   # [bs, n, 1]
+    g2 = G1.sum(-2, keepdim=True)[:, :, :k].transpose(-1, -2) # [bs, k, 1]
 
-    grad_C = (-G1+G2+G3)/epsilon  #[bs, n, k+1]
+    # Combine terms that are multiplied by Gamma to reduce allocations and memory passes
+    # grad_C = (-G1 + G2 + G3) / epsilon
+    # G2 = G21 + G22 + G23
+    # G3 = G31 + G32
+
+    # We want to compute:
+    # M = -grad_output_Gamma + (g1*inv_mu) + (g1_L @ Gamma_mu^T) - pad(g1_L) - (L @ g2) + pad(inv_Kappa @ g2)
+    # then grad_C = (M * Gamma) / epsilon
+
+    g1_L = torch.matmul(g1.transpose(-1, -2), L) # [bs, 1, k]
+    term_G22 = torch.matmul(g1_L, Gamma_mu.transpose(-1, -2)).transpose(-1, -2) # [bs, n, 1]
+    term_G23 = -F.pad(g1_L, (0, 1), mode='constant', value=0) # [bs, 1, k_]
+
+    term_G31 = -torch.matmul(L, g2) # [bs, n, 1]
+    term_G32 = F.pad(torch.matmul(inv_Kappa, g2).transpose(-1, -2), (0, 1), mode='constant', value=0) # [bs, 1, k_]
+
+    M = -grad_output_Gamma + (g1 * inv_mu.unsqueeze(-1)) + term_G22 + term_G23 + term_G31 + term_G32
+    grad_C = (M * Gamma) / epsilon
 
     return grad_C
 
@@ -142,38 +154,34 @@ class TopK_custom(torch.nn.Module):
         super(TopK_custom, self).__init__()
         self.k = k
         self.epsilon = epsilon
-        self.anchors = torch.FloatTensor([0,1]).view([1,1, 2])
+        # Register anchors as a buffer to handle device movement automatically
+        self.register_buffer('anchors', torch.tensor([0.0, 1.0]).view(1, 1, 2))
         self.max_iter = max_iter
-
-        if torch.cuda.is_available():
-            self.anchors = self.anchors.cuda()
 
     def forward(self, scores):
         bs, n = scores.size()
         scores = scores.view([bs, n, 1])
 
-        #find the -inf value and replace it with the minimum value except -inf
-        scores_ = scores.clone().detach()
-        max_scores = torch.max(scores_).detach()
-        scores_[scores_==float('-inf')] = float('inf')
-        min_scores = torch.min(scores_).detach()
-        filled_value = min_scores - (max_scores-min_scores)
-        mask = scores==float('-inf')
-        scores = scores.masked_fill(mask, filled_value)
+        # Handle -inf values more efficiently
+        if torch.any(scores == float('-inf')):
+            scores_finite = scores[scores != float('-inf')]
+            if scores_finite.numel() > 0:
+                max_s = scores_finite.max()
+                min_s = scores_finite.min()
+                filled_value = min_s - (max_s - min_s)
+            else:
+                filled_value = scores.new_tensor(0.0)
+            scores = scores.masked_fill(scores == float('-inf'), filled_value)
 
-        C = (scores-self.anchors)**2
-        C = C / (C.max().detach())
-        #print(C)
-        mu = torch.ones([1, n, 1], requires_grad=False)/n
-        nu = torch.FloatTensor([self.k/n, (n-self.k)/n]).view([1, 1, 2])
+        C = (scores - self.anchors)**2
+        C = C / (C.max().detach() + 1e-10) # Avoid division by zero
 
-        if torch.cuda.is_available():
-            mu = mu.cuda()
-            nu = nu.cuda()
+        # Create mu and nu on the same device as scores
+        mu = torch.full([1, n, 1], 1.0 / n, device=scores.device, dtype=scores.dtype)
+        nu = torch.tensor([self.k / n, (n - self.k) / n], device=scores.device, dtype=scores.dtype).view(1, 1, 2)
 
         Gamma = TopKFunc1.apply(C, mu, nu, self.epsilon, self.max_iter)
-        #print(Gamma)
-        A = Gamma[:,:,0]*n
+        A = Gamma[:, :, 0] * n
 
         return A
 
@@ -185,51 +193,39 @@ class TopK_stablized(torch.nn.Module):
         super(TopK_stablized, self).__init__()
         self.k = k
         self.epsilon = epsilon
-        self.anchors = torch.FloatTensor([0,1]).view([1,2,1])
+        self.register_buffer('anchors', torch.tensor([0.0, 1.0]).view(1, 2, 1))
         self.max_iter = max_iter
-
-        if torch.cuda.is_available():
-            self.anchors = self.anchors.cuda()
 
     def forward(self, scores):
         bs, n = scores.size()[:2]
         scores = scores.view([bs, 1, n])
 
-        #find the -inf value and replace it with the minimum value except -inf
-        scores_ = scores.clone().detach()
-        max_scores = torch.max(scores_).detach()
-        scores_[scores_==float('-inf')] = float('inf')
-        min_scores = torch.min(scores_).detach()
-        filled_value = min_scores - (max_scores-min_scores)
-        mask = scores==float('-inf')
-        scores = scores.masked_fill(mask, filled_value)
+        # Handle -inf values more efficiently
+        if torch.any(scores == float('-inf')):
+            scores_finite = scores[scores != float('-inf')]
+            if scores_finite.numel() > 0:
+                max_s = scores_finite.max()
+                min_s = scores_finite.min()
+                filled_value = min_s - (max_s - min_s)
+            else:
+                filled_value = scores.new_tensor(0.0)
+            scores = scores.masked_fill(scores == float('-inf'), filled_value)
 
-        C = (scores-self.anchors)**2
-        C = C / (C.max().detach())
-        f = torch.zeros([bs, 1, n])
-        g = torch.zeros([bs, 2, 1])
-        mu = torch.ones([1, 1, n], requires_grad=False)/n
-        nu = torch.FloatTensor([self.k/n, (n-self.k)/n]).view([1, 2, 1])
+        C = (scores - self.anchors)**2
+        C = C / (C.max().detach() + 1e-10)
 
-        if torch.cuda.is_available():
-            f = f.cuda()
-            g = g.cuda()
-            mu = mu.cuda()
-            nu = nu.cuda()
+        f_hat = torch.zeros([bs, 1, n], device=scores.device, dtype=scores.dtype)
+        g_hat = torch.zeros([bs, 2, 1], device=scores.device, dtype=scores.dtype)
 
-        def min_epsilon_row(Z, epsilon):
-            return -epsilon*torch.logsumexp((-Z)/epsilon, -1, keepdim=True)
+        log_mu = torch.full([1, 1, n], -np.log(n), device=scores.device, dtype=scores.dtype)
+        log_nu = torch.log(torch.tensor([self.k / n, (n - self.k) / n], device=scores.device, dtype=scores.dtype)).view(1, 2, 1)
+        C_eps = -C / self.epsilon
 
+        for _ in range(self.max_iter):
+            f_hat = -torch.logsumexp(C_eps + g_hat, dim=-2, keepdim=True) + log_mu
+            g_hat = -torch.logsumexp(C_eps + f_hat, dim=-1, keepdim=True) + log_nu
 
-        def min_epsilon_col(Z, epsilon):
-            return -epsilon*torch.logsumexp((-Z)/epsilon, -2, keepdim=True)
-
-
-        for i in range(self.max_iter):
-            f = min_epsilon_col(C-f-g, self.epsilon)+f+self.epsilon*torch.log(mu)
-            g = min_epsilon_row(C-f-g, self.epsilon)+ g +self.epsilon*torch.log(nu)
-
-        P = torch.exp((-C+f+g)/self.epsilon)
-        A = P[:,0,:]*n
+        P = torch.exp(C_eps + f_hat + g_hat)
+        A = P[:, 0, :] * n
         return A
 
