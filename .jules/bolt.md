@@ -1,3 +1,7 @@
 ## 2025-05-22 - ROUGE LCS Algorithmic Optimizations
 **Learning:** The default ROUGE LCS implementation suffered from several performance anti-patterns in Python: O(M*N) memory usage for simple length checks, O(N^2) list building using `insert(0, ...)`, and redundant O(M*N) DP calculations for disjoint token sequences or non-overlapping sentences in summaries.
 **Action:** Always use space-optimized DP ($O(\min(M, N))$) when only the length is needed. Use `append()` + `reverse()` for efficient list building. Implement fast-path checks using `set` intersections to bypass expensive algorithms. Pre-calculate sets in loops to avoid redundant conversions. Use local variable lookups and conditional expressions instead of `max()` in tight loops.
+
+## 2025-06-20 - JAX-Numba Interaction and $O(N^2)$ Permutations
+**Learning:** Using `jax.nn.one_hot` and `einsum`/`matmul` for permutations/sorting creates an $O(N^2)$ bottleneck in memory and compute. `jax.pure_callback` can pass unexpected keyword arguments like `vectorized` and requires explicit `vmap_method="sequential"` for transformations like `jax.jacobian` to work on non-vectorized callbacks. Numba may fail to lower operations involving 0D JAX arrays (Tracers) passed through callbacks.
+**Action:** Replace $O(N^2)$ one-hot permutations with $O(N \log N)$ indexing using `jnp.take_along_axis` and inverse permutations. Always add `**unused_kwargs` to callback functions and explicitly cast scalar parameters to `float()` or `int()` before passing to Numba-jitted functions.

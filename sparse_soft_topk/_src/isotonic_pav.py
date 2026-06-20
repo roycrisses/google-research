@@ -128,10 +128,7 @@ def _solve_real_root(a, b, c, d):
     return -(np.sign(d_a) * np.absolute(d_a) ** (1 / 3))
 
 
-@njit(
-    numba.float32[::1](
-        numba.types.Array(numba.types.float32, 1, "C", readonly=True))
-)
+@njit
 def _isotonic_l2_mask_pav_numba_1d(s):
   n = s.shape[0]
   s = s.astype(np.float64)
@@ -187,13 +184,7 @@ def _isotonic_l2_mask_pav_numba_1d(s):
   return sol.astype(np.float32)
 
 
-@njit(
-    numba.float32[::1](
-        numba.types.Array(numba.types.float32, 1, "C", readonly=True),
-        numba.types.Array(numba.types.float32, 1, "C", readonly=True),
-        numba.types.float32,
-    )
-)
+@njit
 def _isotonic_l4_mask_pav_numba_1d(s, w, l=1e-1):
   """Solves an isotonic regression problem using PAV."""
   n = s.shape[0]
@@ -335,11 +326,7 @@ def _isotonic_lp_mask_pav_1d(s, w, l=1e-1, p=4 / 3, bisect_max_iter=50):
     i = j
   return sol.astype(np.float32)
 
-@njit(
-    numba.float32[:, ::1](
-        numba.types.Array(numba.types.float32, 2, "C", readonly=True),
-    ), parallel=True
-)
+@njit(parallel=True)
 def _isotonic_l2_mask_pav_numba_2d(s):
   """Solves an isotonic regression problem using PAV."""
   batch_shape = s.shape[:-1]
@@ -359,13 +346,7 @@ def _isotonic_l2_mask_pav_numba(s):
     return _isotonic_l2_mask_pav_numba_2d(s)
 
 
-@njit(
-    numba.float32[:, ::1](
-        numba.types.Array(numba.types.float32, 2, "C", readonly=True),
-        numba.types.Array(numba.types.float32, 1, "C", readonly=True),
-        numba.types.float32,
-    ), parallel=True
-)
+@njit(parallel=True)
 def _isotonic_l4_mask_pav_numba_2d(s, w, l=1e-1):
   """Solves an isotonic regression problem using PAV."""
   batch_shape = s.shape[:-1]
@@ -406,8 +387,10 @@ def _isotonic_lp_mask_pav(s, w, l=1e-1, p=4 / 3, bisect_max_iter=50):
     return _isotonic_lp_mask_pav_2d(s, w, l=l, p=p, bisect_max_iter=50)
 
 
-def _isotonic_mask_pav(s, w, l=1e-1, p=4 / 3, bisect_max_iter=50):
+def _isotonic_mask_pav(s, w, l=1e-1, p=4 / 3, bisect_max_iter=50, **unused_kwargs):
   """Solves an isotonic regression problem using PAV."""
+  s = np.asarray(s)
+  w = np.asarray(w)
   l = float(l)
   p = float(p)
   if abs(p - 2) < EPS:
@@ -461,6 +444,7 @@ def isotonic_mask_pav(s, w, l=1e-1, p=4 / 3, bisect_max_iter=50):
       p,
       bisect_max_iter,
       vectorized=False,
+      vmap_method="sequential",
   )
   return sol
 
@@ -480,13 +464,7 @@ def _partition(solution):
   return sizes.astype(np.int32)
 
 
-@njit(
-    numba.float32[::1](
-        numba.types.Array(numba.types.float32, 1, "C", readonly=True),
-        numba.types.Array(numba.types.float32, 1, "C", readonly=True),
-        numba.types.Array(numba.types.float32, 1, "C", readonly=True),
-    ), parallel=True
-)
+@njit(parallel=True)
 def _vjp_mask_numba_l2(s, solution, vector):
   start = 0
   return_value = np.zeros_like(solution)
@@ -502,14 +480,7 @@ def _vjp_mask_numba_l2(s, solution, vector):
   return return_value
 
 
-@njit(
-    numba.float32[::1](
-        numba.types.Array(numba.types.float32, 1, "C", readonly=True),
-        numba.types.float32,
-        numba.types.Array(numba.types.float32, 1, "C", readonly=True),
-        numba.types.Array(numba.types.float32, 1, "C", readonly=True),
-    )
-)
+@njit
 def _vjp_mask_numba_general(s, p, solution, vector):
   start = 0
   return_value = np.zeros_like(solution)
@@ -538,13 +509,7 @@ def _vjp_mask_numba_1d(s, p, solution, vector):
     return _vjp_mask_numba_general(s, p, solution, vector)
 
 
-@njit(
-    numba.float32[:, ::1](
-        numba.types.Array(numba.types.float32, 2, "C", readonly=True),
-        numba.types.Array(numba.types.float32, 2, "C", readonly=True),
-        numba.types.Array(numba.types.float32, 2, "C", readonly=True),
-    )
-)
+@njit
 def _vjp_mask_numba_l2_2d(s, solution, vector):
   batch_shape = s.shape[:-1]
   s = s.reshape((-1, s.shape[-1]))
@@ -554,14 +519,7 @@ def _vjp_mask_numba_l2_2d(s, solution, vector):
   y = y.reshape(batch_shape + (-1,))
   return y
 
-@njit(
-    numba.float32[:, ::1](
-        numba.types.Array(numba.types.float32, 2, "C", readonly=True),
-        numba.types.float32,
-        numba.types.Array(numba.types.float32, 2, "C", readonly=True),
-        numba.types.Array(numba.types.float32, 2, "C", readonly=True),
-    ), parallel=True
-)
+@njit(parallel=True)
 def _vjp_mask_numba_general_2d(s, p, solution, vector):
   batch_shape = s.shape[:-1]
   s = s.reshape((-1, s.shape[-1]))
@@ -580,7 +538,11 @@ def _vjp_mask_numba_2d(s, p, solution, vector):
     return _vjp_mask_numba_general_2d(s, p, solution, vector)
 
 
-def _vjp_mask_numba(s, p, solution, vector):
+def _vjp_mask_numba(s, p, solution, vector, **unused_kwargs):
+  s = np.asarray(s)
+  p = float(p)
+  solution = np.asarray(solution)
+  vector = np.asarray(vector)
   if s.ndim == 1:
     return _vjp_mask_numba_1d(s, p, solution, vector)
   else:
@@ -597,7 +559,14 @@ def _isotonic_mask_pav_bwd(res, g, l=1e-1, p=4 / 3, bisect_max_iter=50):
   s, p, sol = res  # Gets residuals computed in f_fwd
   shape_dtype = jax.ShapeDtypeStruct(shape=g.shape, dtype=sol.dtype)
   output = jax.pure_callback(
-      _vjp_mask_numba, shape_dtype, s, p, sol, g, vectorized=False
+      _vjp_mask_numba,
+      shape_dtype,
+      s,
+      p,
+      sol,
+      g,
+      vectorized=False,
+      vmap_method="sequential",
   )
   return (output, None, None, None, None)
 
@@ -605,13 +574,7 @@ def _isotonic_mask_pav_bwd(res, g, l=1e-1, p=4 / 3, bisect_max_iter=50):
 isotonic_mask_pav.defvjp(_isotonic_mask_pav_fwd, _isotonic_mask_pav_bwd)
 
 
-@njit(
-    numba.float32[::1](
-        numba.types.Array(numba.types.float32, 1, "C", readonly=True),
-        numba.types.Array(numba.types.float32, 1, "C", readonly=True),
-        numba.types.Array(numba.types.float32, 0, "C", readonly=True),
-    )
-)
+@njit
 def _isotonic_l2_mag_pav_numba_1d(s, w, l=1e-1):
   n = s.shape[0]
   s = s.astype(np.float64)
@@ -681,13 +644,7 @@ def _simple_root(a, b):  # root of (x - a)**3 = -bx
     return num_1 / den_1 + den_1 / den_2 + a
 
 
-@njit(
-    numba.float32[::1](
-        numba.types.Array(numba.types.float32, 1, "C", readonly=True),
-        numba.types.Array(numba.types.float32, 1, "C", readonly=True),
-        numba.types.Array(numba.types.float32, 0, "C", readonly=True),
-    )
-)
+@njit
 def _isotonic_l4_mag_pav_numba_1d(s, w, l=1e-1):
   """Solves an isotonic regression problem using PAV."""
   n = s.shape[0]
@@ -821,13 +778,7 @@ def _isotonic_lp_mag_pav_1d(s, w, l=1e-1, p=4 / 3, bisect_max_iter=50):
   return sol.astype(np.float32)
 
 
-@njit(
-    numba.float32[:, ::1](
-        numba.types.Array(numba.types.float32, 2, "C", readonly=True),
-        numba.types.Array(numba.types.float32, 1, "C", readonly=True),
-        numba.types.Array(numba.types.float32, 0, "C", readonly=True),
-    )
-)
+@njit
 def _isotonic_l2_mag_pav_numba_2d(s, w, l=1e-1):
   """Solves an isotonic regression problem using PAV."""
   batch_shape = s.shape[:-1]
@@ -847,13 +798,7 @@ def _isotonic_l2_mag_pav_numba(s, w, l=1e-1):
     return _isotonic_l2_mag_pav_numba_2d(s, w, l=l)
 
 
-@njit(
-    numba.float32[:, ::1](
-        numba.types.Array(numba.types.float32, 2, "C", readonly=True),
-        numba.types.Array(numba.types.float32, 1, "C", readonly=True),
-        numba.types.Array(numba.types.float32, 0, "C", readonly=True),
-    )
-)
+@njit
 def _isotonic_l4_mag_pav_numba_2d(s, w, l=1e-1):
   """Solves an isotonic regression problem using PAV."""
   batch_shape = s.shape[:-1]
@@ -894,8 +839,12 @@ def _isotonic_lp_mag_pav(s, w, l=1e-1, p=4 / 3, bisect_max_iter=50):
     return _isotonic_lp_mag_pav_2d(s, w, l=l, p=p, bisect_max_iter=50)
 
 
-def _isotonic_mag_pav(s, w, l=1e-1, p=4 / 3, bisect_max_iter=50):
+def _isotonic_mag_pav(s, w, l=1e-1, p=4 / 3, bisect_max_iter=50, **unused_kwargs):
   """Solves an isotonic regression problem using PAV."""
+  s = np.asarray(s)
+  w = np.asarray(w)
+  l = float(l)
+  p = float(p)
   if abs(p - 2) < EPS:
     return _isotonic_l2_mag_pav_numba(s, w, l=l)
   elif abs(p - 4 / 3) < EPS:
@@ -931,6 +880,7 @@ def isotonic_mag_pav(s, w, l=1e-1, p=4 / 3, bisect_max_iter=50):
       p,
       bisect_max_iter,
       vectorized=False,
+      vmap_method="sequential",
   )
   return sol
 
@@ -1007,7 +957,13 @@ def _vjp_mag_numba_2d(s, w, l, p, solution, vector):
     return _vjp_mag_numba_general_2d(s, w, l, p, solution, vector)
 
 
-def _vjp_mag_numba(s, w, l, p, solution, vector):
+def _vjp_mag_numba(s, w, l, p, solution, vector, **unused_kwargs):
+  s = np.asarray(s)
+  w = np.asarray(w)
+  l = float(l)
+  p = float(p)
+  solution = np.asarray(solution)
+  vector = np.asarray(vector)
   if s.ndim == 1:
     return _vjp_mag_numba_1d(s, w, l, p, solution, vector)
   else:
@@ -1027,7 +983,16 @@ def _isotonic_mag_pav_bwd(res, g, l=1e-1, p=4 / 3, bisect_max_iter=50):
       shape=jnp.broadcast_shapes(sol.shape, g.shape), dtype=sol.dtype
   )
   output = jax.pure_callback(
-      _vjp_mag_numba, shape_dtype, s, w, l, p, sol, g, vectorized=False
+      _vjp_mag_numba,
+      shape_dtype,
+      s,
+      w,
+      l,
+      p,
+      sol,
+      g,
+      vectorized=False,
+      vmap_method="sequential",
   )
   return (output, None, None, None, None)
 
