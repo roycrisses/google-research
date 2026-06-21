@@ -24,9 +24,15 @@ _CLIP_MODEL_NAME = 'vit_l14_336px'
 
 
 def _clip_preprocess(images, size):
+  # Normalize images to [0, 1] range if they are in uint8.
+  if images.dtype == jax.numpy.uint8:
+    images = images.astype(jax.numpy.float32) / 255.0
+
   target_shape = images.shape[:-3] + (size, size, images.shape[-1])
 
-  images = jax.image.resize(images, shape=target_shape, method='bicubic')
+  # Skip resizing if the images are already at the target resolution.
+  if images.shape[-3:-1] != (size, size):
+    images = jax.image.resize(images, shape=target_shape, method='bicubic')
 
   # Apply CLIP-specific shifting/scaling.  The input to `normalize_image` is
   # expected to be in [0, 1].

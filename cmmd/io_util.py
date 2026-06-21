@@ -54,7 +54,7 @@ def _read_image(path, reshape_to):
   if reshape_to > 0:
     im = _center_crop_and_resize(im, reshape_to)
 
-  return np.asarray(im).astype(np.float32)
+  return np.asarray(im).astype(np.uint8)
 
 
 def _get_img_generator_fn(path, reshape_to, max_count=-1):
@@ -124,7 +124,7 @@ def compute_embeddings_for_dir(
   print(f'Calculating embeddings for {count} images from {img_dir}.')
   dataset = tf.data.Dataset.from_generator(
       generator_fn,
-      output_signature=tf.TensorSpec(shape=(None, None, 3), dtype=tf.float32),
+      output_signature=tf.TensorSpec(shape=(None, None, 3), dtype=tf.uint8),
   )
   per_device_batch_size = batch_size // jax.device_count()
   dataset = dataset.batch(per_device_batch_size, drop_remainder=True)
@@ -134,15 +134,6 @@ def compute_embeddings_for_dir(
   all_embs = []
   for batch in tqdm.tqdm(dataset, total=count // batch_size):
     image_batch = jax.tree.map(np.asarray, batch)
-
-    # Normalize to the [0, 1] range.
-    image_batch = image_batch / 255.0
-
-    if np.min(image_batch) < 0 or np.max(image_batch) > 1:
-      raise ValueError(
-          'Image values are expected to be in [0, 1]. Found:'
-          f' [{np.min(image_batch)}, {np.max(image_batch)}].'
-      )
 
     # Compute the embeddings using a pmapped function.
     embs = np.asarray(

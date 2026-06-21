@@ -1,3 +1,7 @@
 ## 2025-05-22 - ROUGE LCS Algorithmic Optimizations
 **Learning:** The default ROUGE LCS implementation suffered from several performance anti-patterns in Python: O(M*N) memory usage for simple length checks, O(N^2) list building using `insert(0, ...)`, and redundant O(M*N) DP calculations for disjoint token sequences or non-overlapping sentences in summaries.
 **Action:** Always use space-optimized DP ($O(\min(M, N))$) when only the length is needed. Use `append()` + `reverse()` for efficient list building. Implement fast-path checks using `set` intersections to bypass expensive algorithms. Pre-calculate sets in loops to avoid redundant conversions. Use local variable lookups and conditional expressions instead of `max()` in tight loops.
+
+## 2025-05-23 - CMMD Pipeline and Squared Norm Optimizations
+**Learning:** For large-scale image metrics (like CMMD with 30k images), host-to-device transfer of `float32` images is a major bottleneck (4x larger than `uint8`). Additionally, `jnp.diag(jnp.matmul(x, x.T))` is a common anti-pattern in JAX/NumPy for squared norms that forces an $O(N^2)$ allocation and $O(N^2 D)$ complexity, which can cause OOM on large $N$.
+**Action:** Always transfer images as `uint8` and normalize on the accelerator. Replace diagonal-of-matmul with `jnp.sum(jnp.square(x), axis=1)` to achieve $O(ND)$ complexity and $O(N)$ memory for norms. Always skip redundant resizing if input resolution matches target.
