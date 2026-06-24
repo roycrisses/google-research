@@ -1,3 +1,7 @@
 ## 2025-05-22 - ROUGE LCS Algorithmic Optimizations
 **Learning:** The default ROUGE LCS implementation suffered from several performance anti-patterns in Python: O(M*N) memory usage for simple length checks, O(N^2) list building using `insert(0, ...)`, and redundant O(M*N) DP calculations for disjoint token sequences or non-overlapping sentences in summaries.
 **Action:** Always use space-optimized DP ($O(\min(M, N))$) when only the length is needed. Use `append()` + `reverse()` for efficient list building. Implement fast-path checks using `set` intersections to bypass expensive algorithms. Pre-calculate sets in loops to avoid redundant conversions. Use local variable lookups and conditional expressions instead of `max()` in tight loops.
+
+## 2025-06-24 - JAX Memory and Matrix Operation Anti-patterns
+**Learning:** Computing squared norms using `jnp.diag(jnp.matmul(x, x.T))` is a major anti-pattern in JAX/NumPy. It scales $O(N^2 D)$ in computation and $O(N^2)$ in memory, which is catastrophic for large datasets (e.g., $N=30,000$). Additionally, `jnp.einsum` for simple 2D/3D matrix multiplications can be slower than nested `jnp.matmul` because `matmul` is a first-class HLO operator (Dot) that XLA prioritizes for optimization and tiling.
+**Action:** Always use `jnp.sum(jnp.square(x), axis=1)` for squared norms ($O(ND)$). Replace `einsum` with nested `matmul` for standard matrix products to better leverage XLA's optimized Dot lowering.
