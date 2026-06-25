@@ -147,28 +147,78 @@ class VRDEvaluator:
     # positives.
     detected = [False] * len(groundtruths)
 
-    def match_groundtruth(prediction, detected):
-      # Checks if the prediction is a true or false positive.
-      for i, groundtruth in enumerate(groundtruths):
-        if detected[i]:
-          continue
-        if self.is_correct_prediction(prediction, groundtruth, attr=attr):
-          return i, detected
-      return -1, detected
+    # Performance optimization: cache attributes and methods in local variables.
+    tp_idx = self.TP_IDX
+    fp_idx = self.FP_IDX
+    fn_idx = self.FN_IDX
+    iou_threshold = self.iou_threshold
+    check_entity = self.check_entity
+    attr_value = attr.value
+
+    # Precompute areas and labels for groundtruths to avoid repeated work in the inner loop.
+    gt_boxes_a = [gt.bbox_a for gt in groundtruths]
+    gt_boxes_b = [gt.bbox_b for gt in groundtruths]
+    gt_areas_a = [max(0., b.xmax - b.xmin) * max(0., b.ymax - b.ymin) for b in gt_boxes_a]
+    gt_areas_b = [max(0., b.xmax - b.xmin) * max(0., b.ymax - b.ymin) for b in gt_boxes_b]
+    gt_labels = [getattr(gt, attr_value) for gt in groundtruths]
 
     results = numpy.zeros((self.NUM_LABELS, 3))
     for prediction in predictions:
-      label = getattr(prediction, attr.value)
-      i, detected = match_groundtruth(prediction, detected)
-      if i < 0:
-        results[label, self.FP_IDX] += 1
+      label = getattr(prediction, attr_value)
+      pred_a = prediction.bbox_a
+      pred_b = prediction.bbox_b
+      area_pred_a = max(0., pred_a.xmax - pred_a.xmin) * max(0., pred_a.ymax - pred_a.ymin)
+      area_pred_b = max(0., pred_b.xmax - pred_b.xmin) * max(0., pred_b.ymax - pred_b.ymin)
+
+      # Inlined match_groundtruth for performance.
+      match_idx = -1
+      for i, gt_a in enumerate(gt_boxes_a):
+        if detected[i]:
+          continue
+
+        # Inlined is_correct_prediction and is_success_detection.
+        if pred_a.image_id != gt_a.image_id:
+          continue
+        if check_entity and pred_a.entity != gt_a.entity:
+          continue
+
+        # compute_iou inline for box a
+        xmin = max(pred_a.xmin, gt_a.xmin)
+        xmax = min(pred_a.xmax, gt_a.xmax)
+        ymin = max(pred_a.ymin, gt_a.ymin)
+        ymax = min(pred_a.ymax, gt_a.ymax)
+        area_overlap_a = max(0., xmax - xmin) * max(0., ymax - ymin)
+        if area_overlap_a / (area_pred_a + gt_areas_a[i] - area_overlap_a) < iou_threshold:
+          continue
+
+        gt_b = gt_boxes_b[i]
+        if pred_b.image_id != gt_b.image_id:
+          continue
+        if check_entity and pred_b.entity != gt_b.entity:
+          continue
+
+        # compute_iou inline for box b
+        xmin = max(pred_b.xmin, gt_b.xmin)
+        xmax = min(pred_b.xmax, gt_b.xmax)
+        ymin = max(pred_b.ymin, gt_b.ymin)
+        ymax = min(pred_b.ymax, gt_b.ymax)
+        area_overlap_b = max(0., xmax - xmin) * max(0., ymax - ymin)
+        if area_overlap_b / (area_pred_b + gt_areas_b[i] - area_overlap_b) < iou_threshold:
+          continue
+
+        if label == gt_labels[i]:
+          match_idx = i
+          break
+
+      if match_idx < 0:
+        results[label, fp_idx] += 1
       else:
-        detected[i] = True
-        results[label, self.TP_IDX] += 1
-    for i, groundtruth in enumerate(groundtruths):
+        detected[match_idx] = True
+        results[label, tp_idx] += 1
+
+    for i, gt_label in enumerate(gt_labels):
       if not detected[i]:
-        label = getattr(groundtruth, attr.value)
-        results[label, self.FN_IDX] += 1
+        results[gt_label, fn_idx] += 1
     return results
 
   # TODO(ycsu): update the paper link after arxiv version is ready.
@@ -279,10 +329,9 @@ def compute_iou(bbox_a, bbox_b):
   xmax = min(bbox_a.xmax, bbox_b.xmax)
   ymin = max(bbox_a.ymin, bbox_b.ymin)
   ymax = min(bbox_a.ymax, bbox_b.ymax)
-  overlap = Box(bbox_a.image_id, 'overlap', ymin, xmin, ymax, xmax)
-  area_overlap = compute_area(overlap)
-  area_a = compute_area(bbox_a)
-  area_b = compute_area(bbox_b)
+  area_overlap = max(0., xmax - xmin) * max(0., ymax - ymin)
+  area_a = max(0., bbox_a.xmax - bbox_a.xmin) * max(0., bbox_a.ymax - bbox_a.ymin)
+  area_b = max(0., bbox_b.xmax - bbox_b.xmin) * max(0., bbox_b.ymax - bbox_b.ymin)
   return area_overlap / (area_a + area_b - area_overlap)
 
 
