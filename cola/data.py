@@ -75,7 +75,8 @@ def extract_log_mel_spectrogram(waveform,
                                 fft_length=1024,
                                 n_mels=64,
                                 fmin=60.0,
-                                fmax=7800.0):
+                                fmax=7800.0,
+                                mel_matrix=None):
   """Extract frames of log mel spectrogram from a raw waveform."""
 
   stfts = tf.signal.stft(
@@ -85,11 +86,15 @@ def extract_log_mel_spectrogram(waveform,
       fft_length=fft_length)
   spectrograms = tf.abs(stfts)
 
-  num_spectrogram_bins = stfts.shape[-1]
-  lower_edge_hertz, upper_edge_hertz, num_mel_bins = fmin, fmax, n_mels
-  linear_to_mel_weight_matrix = tf.signal.linear_to_mel_weight_matrix(
-      num_mel_bins, num_spectrogram_bins, sample_rate, lower_edge_hertz,
-      upper_edge_hertz)
+  if mel_matrix is not None:
+    linear_to_mel_weight_matrix = mel_matrix
+  else:
+    num_spectrogram_bins = stfts.shape[-1]
+    lower_edge_hertz, upper_edge_hertz, num_mel_bins = fmin, fmax, n_mels
+    linear_to_mel_weight_matrix = tf.signal.linear_to_mel_weight_matrix(
+        num_mel_bins, num_spectrogram_bins, sample_rate, lower_edge_hertz,
+        upper_edge_hertz)
+
   mel_spectrograms = tf.tensordot(spectrograms, linear_to_mel_weight_matrix, 1)
   mel_spectrograms.set_shape(spectrograms.shape[:-1].concatenate(
       linear_to_mel_weight_matrix.shape[-1:]))

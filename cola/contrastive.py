@@ -65,18 +65,29 @@ class ContrastiveModel:
     self._n_channels = 1
     self._input_shape = (-1, self._n_frames, self._n_bands, self._n_channels)
 
+    # Precompute mel matrix for performance.
+    self._mel_matrix = tf.signal.linear_to_mel_weight_matrix(
+        num_mel_bins=self._n_bands,
+        num_spectrogram_bins=1024 // 2 + 1,
+        sample_rate=16000,
+        lower_edge_hertz=60.0,
+        upper_edge_hertz=7800.0)
+
+  @tf.function
   def _prepare_example(self, example):
     """Creates an example (anchor-positive) for instance discrimination."""
     x = tf.math.l2_normalize(example["audio"], epsilon=1e-9)
 
     waveform_a = data.extract_window(x)
-    mels_a = data.extract_log_mel_spectrogram(waveform_a)
+    mels_a = data.extract_log_mel_spectrogram(
+        waveform_a, mel_matrix=self._mel_matrix)
     frames_anchors = mels_a[Ellipsis, tf.newaxis]
 
     waveform_p = data.extract_window(x)
     waveform_p = waveform_p + (
         self._noise * tf.random.normal(tf.shape(waveform_p)))
-    mels_p = data.extract_log_mel_spectrogram(waveform_p)
+    mels_p = data.extract_log_mel_spectrogram(
+        waveform_p, mel_matrix=self._mel_matrix)
     frames_positives = mels_p[Ellipsis, tf.newaxis]
 
     return frames_anchors, frames_positives
