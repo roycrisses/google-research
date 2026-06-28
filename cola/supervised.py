@@ -56,6 +56,15 @@ class SupervisedModule:
     self._n_channels = n_channels
     self._shuffle_buffer = 1000
 
+    # Precompute mel matrix for performance.
+    self._mel_matrix = tf.signal.linear_to_mel_weight_matrix(
+        num_mel_bins=self._n_bands,
+        num_spectrogram_bins=1024 // 2 + 1,
+        sample_rate=16000,
+        lower_edge_hertz=60.0,
+        upper_edge_hertz=7800.0)
+
+  @tf.function
   def _prepare_standard_example(self, example, is_training):
     """Creates an example for supervised training."""
     x = example["audio"]
@@ -70,7 +79,7 @@ class SupervisedModule:
           pad_end=True)
       x = tf.math.l2_normalize(x, axis=-1, epsilon=1e-9)
 
-    x = data.extract_log_mel_spectrogram(x)
+    x = data.extract_log_mel_spectrogram(x, mel_matrix=self._mel_matrix)
     x = x[Ellipsis, tf.newaxis]
     y = example["label"]
     return x, y
