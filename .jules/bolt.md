@@ -1,3 +1,7 @@
 ## 2025-05-22 - ROUGE LCS Algorithmic Optimizations
 **Learning:** The default ROUGE LCS implementation suffered from several performance anti-patterns in Python: O(M*N) memory usage for simple length checks, O(N^2) list building using `insert(0, ...)`, and redundant O(M*N) DP calculations for disjoint token sequences or non-overlapping sentences in summaries.
 **Action:** Always use space-optimized DP ($O(\min(M, N))$) when only the length is needed. Use `append()` + `reverse()` for efficient list building. Implement fast-path checks using `set` intersections to bypass expensive algorithms. Pre-calculate sets in loops to avoid redundant conversions. Use local variable lookups and conditional expressions instead of `max()` in tight loops.
+
+## 2025-07-02 - Sinkhorn Loop Optimizations
+**Learning:** Sinkhorn iterations involve repeated operations on large cost matrices ($N \times M$). Redundant divisions and large-tensor multiplications in the hot loop can be eliminated by precomputing `inv_eps = 1.0 / eps` and `cost_eps = cost * inv_eps` once per iteration. This `cost_eps` can be reused for both row and column marginal updates. Replacing `** 2.0` with `tf.math.square` also provides a measurable speedup in TensorFlow.
+**Action:** Always hoist invariant large-tensor operations out of updates within iterative algorithms. Use `tf.math.square` instead of power for squaring. When refactoring `logsumexp` based updates, ensure the log-marginals are correctly reconstructed for error checks.
