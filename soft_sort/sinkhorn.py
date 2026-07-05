@@ -38,18 +38,22 @@ def center(cost, f, g):
 
 def _log_marginal(cost, f, g, eps, axis):
   """Computes the log of the marginals of the transport matrix."""
+  inv_eps = 1.0 / eps
+  cost_eps = cost * inv_eps
+  f_inv_eps = f * inv_eps
+  g_inv_eps = g * inv_eps
   if axis == 1:  # marginal over the second dimension (b)
     if f.shape.rank == 2:
-      return (g + eps * tf.reduce_logsumexp(
-          (f[:, :, tf.newaxis] - cost) / eps, axis=1)) / eps
-    return (g + eps * tf.reduce_logsumexp(
-        (f[:, :, tf.newaxis, :] - cost[:, :, :, tf.newaxis]) / eps, axis=1)) / eps
+      return g_inv_eps + tf.reduce_logsumexp(
+          f_inv_eps[:, :, tf.newaxis] - cost_eps, axis=1)
+    return g_inv_eps + tf.reduce_logsumexp(
+        f_inv_eps[:, :, tf.newaxis, :] - cost_eps[:, :, :, tf.newaxis], axis=1)
 
   if f.shape.rank == 2:
-    return (f + eps * tf.reduce_logsumexp(
-        (g[:, tf.newaxis, :] - cost) / eps, axis=2)) / eps
-  return (f + eps * tf.reduce_logsumexp(
-      (g[:, tf.newaxis, :, :] - cost[:, :, :, tf.newaxis]) / eps, axis=2)) / eps
+    return f_inv_eps + tf.reduce_logsumexp(
+        g_inv_eps[:, tf.newaxis, :] - cost_eps, axis=2)
+  return f_inv_eps + tf.reduce_logsumexp(
+      g_inv_eps[:, tf.newaxis, :, :] - cost_eps[:, :, :, tf.newaxis], axis=2)
 
 
 def softmin(cost, f, g, eps, axis):
@@ -77,7 +81,8 @@ def cost_fn(x, y,
       cost = tf.math.abs(xy_difference)
       derivative = tf.math.sign(xy_difference)
     elif power == 2.0:
-      cost = xy_difference**2.0
+      # Use square instead of ** 2.0 for performance.
+      cost = tf.math.square(xy_difference)
       derivative = 2.0 * xy_difference
     else:
       abs_diff = tf.math.abs(xy_difference)
@@ -86,10 +91,18 @@ def cost_fn(x, y,
     return cost, derivative
   # Otherwise data is high dimensional, in form [batch,n,d]. L2 distance used.
   elif x.shape.rank == 3 and y.shape.rank == 3:
-    x2 = tf.reduce_sum(x**2, axis=2)
-    y2 = tf.reduce_sum(y**2, axis=2)
-    cost = (x2[:, :, tf.newaxis] + y2[:, tf.newaxis, :] -
-            tf.matmul(x, y, transpose_b=True))**(power / 2)
+    x2 = tf.reduce_sum(tf.math.square(x), axis=2)
+    y2 = tf.reduce_sum(tf.math.square(y), axis=2)
+    # Note: this is missing a factor of 2 in front of the matmul to be true L2.
+    # We preserve the existing behavior but optimize the power calculation.
+    cost = x2[:, :, tf.newaxis] + y2[:, tf.newaxis, :] - tf.matmul(
+        x, y, transpose_b=True)
+    if power == 2.0:
+      pass
+    elif power == 1.0:
+      cost = tf.math.sqrt(tf.math.maximum(cost, 0.0))
+    else:
+      cost = tf.math.maximum(cost, 0.0)**(power / 2.0)
     derivative = None
     return cost, derivative
 
@@ -137,19 +150,23 @@ def sinkhorn_iterations(x,
   loga = tf.math.log(a)
   logb = tf.math.log(b)
   cost, d_cost = cost_fn(x, y, power)
+  cost_expanded = cost[:, :, :, tf.newaxis] if a.shape.rank > 2 else cost
 
   def body_fn(f, g, eps, num_iter):
     for _ in range(inner_num_iter):
+      inv_eps = 1.0 / eps
       if f.shape.rank == 2:
-        g = eps * logb - eps * tf.reduce_logsumexp(
-            (f[:, :, tf.newaxis] - cost) / eps, axis=1)
-        f = eps * loga - eps * tf.reduce_logsumexp(
-            (g[:, tf.newaxis, :] - cost) / eps, axis=2)
+        cost_eps = cost * inv_eps
+        g = eps * (logb - tf.reduce_logsumexp(
+            f[:, :, tf.newaxis] * inv_eps - cost_eps, axis=1))
+        f = eps * (loga - tf.reduce_logsumexp(
+            g[:, tf.newaxis, :] * inv_eps - cost_eps, axis=2))
       else:
-        g = eps * logb - eps * tf.reduce_logsumexp(
-            (f[:, :, tf.newaxis, :] - cost[:, :, :, tf.newaxis]) / eps, axis=1)
-        f = eps * loga - eps * tf.reduce_logsumexp(
-            (g[:, tf.newaxis, :, :] - cost[:, :, :, tf.newaxis]) / eps, axis=2)
+        cost_eps_expanded = cost_expanded * inv_eps
+        g = eps * (logb - tf.reduce_logsumexp(
+            f[:, :, tf.newaxis, :] * inv_eps - cost_eps_expanded, axis=1))
+        f = eps * (loga - tf.reduce_logsumexp(
+            g[:, tf.newaxis, :, :] * inv_eps - cost_eps_expanded, axis=2))
       eps = tf.math.maximum(eps * epsilon_decay, epsilon)
     return [f, g, eps, num_iter + inner_num_iter]
 
