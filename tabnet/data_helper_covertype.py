@@ -123,9 +123,11 @@ def input_fn(data_file,
   if shuffle:
     dataset = dataset.shuffle(buffer_size=n_buffer)
 
-  dataset = dataset.map(parse_csv, num_parallel_calls=n_parallel)
-
   # Repeat after shuffling, to prevent separate epochs from blending together.
   dataset = dataset.repeat(num_epochs)
+  # Batch before map to enable vectorized CSV parsing for significant speedup.
   dataset = dataset.batch(batch_size)
+  dataset = dataset.map(parse_csv, num_parallel_calls=n_parallel)
+  # Prefetch to overlap data preprocessing with model execution.
+  dataset = dataset.prefetch(buffer_size=tf.data.AUTOTUNE)
   return dataset
