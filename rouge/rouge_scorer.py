@@ -43,6 +43,7 @@ import numpy as np
 import six
 from six.moves import map
 from six.moves import range
+from six.moves import zip
 from rouge_score import scoring
 from rouge_score import tokenizers
 
@@ -177,10 +178,12 @@ def _create_ngrams(tokens, n):
     A dictionary mapping each bigram to the number of occurrences.
   """
 
-  ngrams = collections.Counter()
-  for ngram in (tuple(tokens[i:i + n]) for i in range(len(tokens) - n + 1)):
-    ngrams[ngram] += 1
-  return ngrams
+  if n > len(tokens):
+    return collections.Counter()
+
+  # Optimization: zip(*[tokens[i:] for i in range(n)]) is significantly faster
+  # than a manual loop with tuple slicing in each iteration.
+  return collections.Counter(zip(*[tokens[i:] for i in range(n)]))
 
 
 def _score_lcs(target_tokens, prediction_tokens):

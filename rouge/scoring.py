@@ -145,12 +145,13 @@ class BootstrapAggregator(object):
     """
 
     # Matrix of (bootstrap sample, measure).
-    sample_mean = np.zeros((self._n_samples, matrix.shape[1]))
-    for i in range(self._n_samples):
-      sample_idx = np.random.choice(
-          np.arange(matrix.shape[0]), size=matrix.shape[0])
-      sample = matrix[sample_idx, :]
-      sample_mean[i, :] = np.mean(sample, axis=0)
+    n_rows = matrix.shape[0]
+    # Optimization: Vectorizing the bootstrap loop with NumPy advanced indexing
+    # and random.randint provides a significant speedup over repeated
+    # random.choice and Python loops.
+    sample_indices = np.random.randint(
+        0, n_rows, size=(self._n_samples, n_rows))
+    sample_mean = np.mean(matrix[sample_indices], axis=1)
 
     # Take percentiles on the estimate of the mean using bootstrap samples.
     # Final result is a (bounds, measure) matrix.
