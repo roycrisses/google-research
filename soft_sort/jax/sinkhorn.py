@@ -101,8 +101,13 @@ def sinkhorn_iterations(x,
   while (iterations < max_iterations) and (err >= threshold or eps > epsilon):
     for _ in range(inner_iterations):
       iterations += 1
-      g = eps * logb + softmin(cost, f, g, eps, axis=1) + g
-      f = eps * loga + softmin(cost, f, g, eps, axis=2) + f
+      # Precompute inv_eps to avoid multiple divisions and intermediate array
+      # allocations with the `center` function inside `softmin`.
+      inv_eps = 1.0 / eps
+      g = eps * logb - eps * scipy.special.logsumexp(
+          (f[:, :, None] - cost) * inv_eps, axis=1)
+      f = eps * loga - eps * scipy.special.logsumexp(
+          (g[:, None, :] - cost) * inv_eps, axis=2)
       eps = max(eps * epsilon_decay, epsilon)
 
     if eps <= epsilon:
