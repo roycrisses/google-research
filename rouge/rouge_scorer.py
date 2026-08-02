@@ -215,12 +215,17 @@ def _lcs_table(ref, can):
   rows = len(ref)
   cols = len(can)
   lcs_table = [[0] * (cols + 1) for _ in range(rows + 1)]
-  for i in range(1, rows + 1):
-    ref_i = ref[i - 1]
-    row_i = lcs_table[i]
+  can_set = set(can)
+  for i, ref_i in enumerate(ref, 1):
     row_prev = lcs_table[i - 1]
-    for j in range(1, cols + 1):
-      if ref_i == can[j - 1]:
+    # Fast path: if ref_i is not in can, row_i is identical to row_prev.
+    # Sharing the list reference is safe and avoids O(cols) inner loop.
+    if ref_i not in can_set:
+      lcs_table[i] = row_prev
+      continue
+    row_i = lcs_table[i]
+    for j, can_j in enumerate(can, 1):
+      if ref_i == can_j:
         row_i[j] = row_prev[j - 1] + 1
       else:
         v1 = row_prev[j]
@@ -241,10 +246,15 @@ def _lcs_length(ref, can):
   prev_row = [0] * (cols + 1)
   curr_row = [0] * (cols + 1)
 
-  for i in range(1, rows + 1):
-    ref_i = ref[i - 1]
-    for j in range(1, cols + 1):
-      if ref_i == can[j - 1]:
+  can_set = set(can)
+  for i, ref_i in enumerate(ref, 1):
+    # Fast path: if ref_i is not in can, curr_row is identical to prev_row.
+    if ref_i not in can_set:
+      curr_row[:] = prev_row
+      prev_row, curr_row = curr_row, prev_row
+      continue
+    for j, can_j in enumerate(can, 1):
+      if ref_i == can_j:
         curr_row[j] = prev_row[j - 1] + 1
       else:
         v1 = prev_row[j]
