@@ -177,10 +177,9 @@ def _create_ngrams(tokens, n):
     A dictionary mapping each bigram to the number of occurrences.
   """
 
-  ngrams = collections.Counter()
-  for ngram in (tuple(tokens[i:i + n]) for i in range(len(tokens) - n + 1)):
-    ngrams[ngram] += 1
-  return ngrams
+  # Optimize n-gram generation by leveraging C-optimized zip and slicing.
+  # This avoids manual iteration and tuple creation in Python.
+  return collections.Counter(six.moves.zip(*[tokens[i:] for i in range(n)]))
 
 
 def _score_lcs(target_tokens, prediction_tokens):
@@ -215,17 +214,23 @@ def _lcs_table(ref, can):
   rows = len(ref)
   cols = len(can)
   lcs_table = [[0] * (cols + 1) for _ in range(rows + 1)]
+  can_set = set(can)
   for i in range(1, rows + 1):
     ref_i = ref[i - 1]
-    row_i = lcs_table[i]
     row_prev = lcs_table[i - 1]
-    for j in range(1, cols + 1):
-      if ref_i == can[j - 1]:
-        row_i[j] = row_prev[j - 1] + 1
-      else:
-        v1 = row_prev[j]
-        v2 = row_i[j - 1]
-        row_i[j] = v1 if v1 >= v2 else v2
+    # Fast path: if ref_i is not in can, the row is identical to row_prev.
+    # Reusing row_prev saves O(N) memory allocations and O(N) loop steps.
+    if ref_i not in can_set:
+      lcs_table[i] = row_prev
+    else:
+      row_i = lcs_table[i]
+      for j in range(1, cols + 1):
+        if ref_i == can[j - 1]:
+          row_i[j] = row_prev[j - 1] + 1
+        else:
+          v1 = row_prev[j]
+          v2 = row_i[j - 1]
+          row_i[j] = v1 if v1 >= v2 else v2
   return lcs_table
 
 
@@ -241,15 +246,22 @@ def _lcs_length(ref, can):
   prev_row = [0] * (cols + 1)
   curr_row = [0] * (cols + 1)
 
+  can_set = set(can)
+
   for i in range(1, rows + 1):
     ref_i = ref[i - 1]
-    for j in range(1, cols + 1):
-      if ref_i == can[j - 1]:
-        curr_row[j] = prev_row[j - 1] + 1
-      else:
-        v1 = prev_row[j]
-        v2 = curr_row[j - 1]
-        curr_row[j] = v1 if v1 >= v2 else v2
+    # Fast path: if ref_i is not in can, the row is identical to prev_row.
+    # Copying prev_row to curr_row saves O(N) loop steps.
+    if ref_i not in can_set:
+      curr_row[:] = prev_row
+    else:
+      for j in range(1, cols + 1):
+        if ref_i == can[j - 1]:
+          curr_row[j] = prev_row[j - 1] + 1
+        else:
+          v1 = prev_row[j]
+          v2 = curr_row[j - 1]
+          curr_row[j] = v1 if v1 >= v2 else v2
     prev_row, curr_row = curr_row, prev_row
 
   return prev_row[cols]
