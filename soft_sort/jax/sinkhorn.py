@@ -16,7 +16,7 @@
 """A Jax version of Sinkhorn's algorithm."""
 
 import gin
-from jax import scipy
+import jax.scipy
 import jax.numpy as np
 
 
@@ -25,7 +25,7 @@ def center(cost, f, g):
 
 
 def softmin(cost, f, g, eps, axis):
-  return -eps * scipy.special.logsumexp(-center(cost, f, g) / eps, axis=axis)
+  return -eps * jax.scipy.special.logsumexp(-center(cost, f, g) / eps, axis=axis)
 
 
 def error(cost, f, g, eps, b):
@@ -34,7 +34,9 @@ def error(cost, f, g, eps, b):
 
 
 def transport(cost, f, g, eps):
-  return np.exp(-center(cost, f, g) / eps)
+  # Precompute inv_eps to replace expensive divisions with multiplications
+  inv_eps = 1.0 / eps
+  return np.exp(-center(cost, f, g) * inv_eps)
 
 
 def cost_fn(x, y, power):
@@ -101,8 +103,15 @@ def sinkhorn_iterations(x,
   while (iterations < max_iterations) and (err >= threshold or eps > epsilon):
     for _ in range(inner_iterations):
       iterations += 1
-      g = eps * logb + softmin(cost, f, g, eps, axis=1) + g
-      f = eps * loga + softmin(cost, f, g, eps, axis=2) + f
+      # Precompute inv_eps to replace expensive divisions with multiplications
+      inv_eps = 1.0 / eps
+      # Mathematically simplified updates to eliminate softmin and center allocations.
+      # This is numerically stable because jax.scipy.special.logsumexp internally
+      # subtracts the maximum value to prevent exponent overflow.
+      g = eps * logb - eps * jax.scipy.special.logsumexp(
+          (f[:, :, np.newaxis] - cost) * inv_eps, axis=1)
+      f = eps * loga - eps * jax.scipy.special.logsumexp(
+          (g[:, np.newaxis, :] - cost) * inv_eps, axis=2)
       eps = max(eps * epsilon_decay, epsilon)
 
     if eps <= epsilon:
