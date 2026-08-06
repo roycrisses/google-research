@@ -177,12 +177,11 @@ class LinearTransform(nn.Module):
     mat_seq = self.param("seq_kernel", self.kernel_init,
                          (inputs.shape[-2], inputs.shape[-2]))
 
-    return jnp.einsum(  # pytype: disable=wrong-arg-types  # jnp-type
-        "bij,jk,ni->bnk",
-        inputs,
+    # Replacing jnp.einsum with nested jnp.matmul provides a significant performance boost
+    # because matmul is directly optimized by XLA on modern accelerators and CPUs.
+    return jnp.matmul(
+        jnp.matmul(mat_seq, inputs, precision=self.precision),
         mat_hidden,
-        mat_seq,
-        optimize=True,
         precision=self.precision)
 
 

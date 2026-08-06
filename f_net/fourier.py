@@ -49,10 +49,9 @@ def _two_dim_matmul(x, matrix_dim_one,
                     matrix_dim_two,
                     precision):
   """Applies 2D matrix multiplication to 2D input arrays."""
-  return jnp.einsum(  # pytype: disable=wrong-arg-types  # jnp-type
-      "ij,jk,ni->nk",
-      x,
+  # Replacing jnp.einsum with nested jnp.matmul provides a performance boost
+  # because matmul is directly optimized by XLA on modern hardware.
+  return jnp.matmul(
+      jnp.matmul(matrix_dim_one, x, precision=precision),
       matrix_dim_two,
-      matrix_dim_one,
-      optimize=True,
       precision=precision)
