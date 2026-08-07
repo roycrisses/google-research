@@ -339,6 +339,8 @@ def bi_tempered_logistic_loss(activations,
           escorts = escorts / tf.reduce_sum(escorts, -1, True)
           derivative = delta_probs_times_forget_factor - tf.multiply(
               escorts, delta_forget_sum)
+          while d_loss.shape.rank < derivative.shape.rank:
+            d_loss = tf.expand_dims(d_loss, -1)
           return tf.multiply(d_loss, derivative)
 
         return loss_values, grad
@@ -386,12 +388,9 @@ def sparse_bi_tempered_logistic_loss(activations, labels, t1, t2, num_iters=5):
       """
       with tf.name_scope('gradient_sparse_bitempered_logistic'):
         probabilities = tempered_softmax(activations, t2, num_iters)
-        # TODO(eamid): Replace one hot with gather.
-        loss_values = -log_t(
-            tf.reshape(
-                tf.gather_nd(probabilities,
-                             tf.where(tf.one_hot(labels, num_classes))),
-                tf.shape(activations)[:-1]), t1) - 1.0 / (2.0 - t1) * (
+        # Replace inefficient tf.one_hot + tf.where + tf.gather_nd pattern with direct tf.gather
+        gathered_probs = tf.gather(probabilities, labels, batch_dims=labels.shape.rank, axis=-1)
+        loss_values = -log_t(gathered_probs, t1) - 1.0 / (2.0 - t1) * (
                     1.0 - tf.reduce_sum(tf.pow(probabilities, 2.0 - t1), -1))
 
         def grad(d_loss):
@@ -412,6 +411,8 @@ def sparse_bi_tempered_logistic_loss(activations, labels, t1, t2, num_iters=5):
           escorts = escorts / tf.reduce_sum(escorts, -1, True)
           derivative = delta_probs_times_forget_factor - tf.multiply(
               escorts, delta_forget_sum)
+          while d_loss.shape.rank < derivative.shape.rank:
+            d_loss = tf.expand_dims(d_loss, -1)
           return tf.multiply(d_loss, derivative)
 
         return loss_values, grad

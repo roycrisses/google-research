@@ -170,6 +170,26 @@ class LossTest(tf.test.TestCase):
     sparse_loss_out = sparse_loss.numpy()
     self.assertAllClose(actual_loss_out, sparse_loss_out)
 
+  def test_multidimensional_gradients(self):
+    """Test gradient backpropagation for multidimensional inputs."""
+    labels = tf.constant([[0, 2], [1, 0]])
+    activations = tf.Variable([[[-0.5, 0.1, 2.0], [0.1, 1.5, -5.0]],
+                               [[4.0, -3.0, -6.0], [-1.5, 0.7, 5.2]]])
+    # Test bi_tempered_logistic_loss with 3D activations
+    with tf.GradientTape() as tape:
+      loss_val = loss.bi_tempered_logistic_loss(activations, tf.one_hot(labels, 3), 0.5, 1.5)
+    grad = tape.gradient(loss_val, activations)
+    self.assertEqual(grad.shape, activations.shape)
+
+    # Test sparse_bi_tempered_logistic_loss with 3D activations
+    with tf.GradientTape() as tape:
+      loss_val_sparse = loss.sparse_bi_tempered_logistic_loss(activations, labels, 0.5, 1.5)
+    grad_sparse = tape.gradient(loss_val_sparse, activations)
+    self.assertEqual(grad_sparse.shape, activations.shape)
+
+    # Assert gradients are identical
+    self.assertAllClose(grad.numpy(), grad_sparse.numpy())
+
   def test_tempered_softmax(self):
     # Test softmax function with different temperatures.
     activations = [[-0.5, 0.1, 2.0], [0.1, 1.5, -5.0], [4.0, -3.0, -6.0]]
