@@ -210,13 +210,18 @@ def _score_lcs(target_tokens, prediction_tokens):
   return scoring.Score(precision=precision, recall=recall, fmeasure=fmeasure)
 
 
-def _lcs_table(ref, can):
+def _lcs_table(ref, can, can_set=None):
   """Create 2-d LCS score table."""
   rows = len(ref)
   cols = len(can)
   lcs_table = [[0] * (cols + 1) for _ in range(rows + 1)]
+  if can_set is None:
+    can_set = set(can)
   for i in range(1, rows + 1):
     ref_i = ref[i - 1]
+    if ref_i not in can_set:
+      lcs_table[i] = lcs_table[i - 1]
+      continue
     row_i = lcs_table[i]
     row_prev = lcs_table[i - 1]
     for j in range(1, cols + 1):
@@ -229,10 +234,11 @@ def _lcs_table(ref, can):
   return lcs_table
 
 
-def _lcs_length(ref, can):
+def _lcs_length(ref, can, can_set=None):
   """Compute LCS length efficiently."""
   if len(ref) < len(can):
     ref, can = can, ref
+    can_set = None
 
   rows = len(ref)
   cols = len(can)
@@ -241,8 +247,15 @@ def _lcs_length(ref, can):
   prev_row = [0] * (cols + 1)
   curr_row = [0] * (cols + 1)
 
+  if can_set is None:
+    can_set = set(can)
+
   for i in range(1, rows + 1):
     ref_i = ref[i - 1]
+    if ref_i not in can_set:
+      curr_row[:] = prev_row
+      prev_row, curr_row = curr_row, prev_row
+      continue
     for j in range(1, cols + 1):
       if ref_i == can[j - 1]:
         curr_row[j] = prev_row[j - 1] + 1
@@ -305,10 +318,13 @@ def _summary_level_lcs(ref_sent, can_sent):
   hits = 0
   for r in ref_sent:
     r_set = set(r)
-    # Only keep candidate sentences that share at least one token with r.
-    reduced_can_sent = [
-        can_sent[i] for i, s_set in enumerate(can_sets) if r_set & s_set
-    ]
+    # Only keep candidate sentences that share at least one token with r,
+    # and pair them with their precomputed set to avoid set regeneration.
+    reduced_can_sent = []
+    for i, s_set in enumerate(can_sets):
+      if r_set & s_set:
+        reduced_can_sent.append((can_sent[i], s_set))
+
     if reduced_can_sent:
       lcs = _union_lcs(r, reduced_can_sent)
       # Prevent double-counting:
@@ -332,12 +348,17 @@ def _union_lcs(ref, c_list):
 
   Args:
     ref: list of tokens
-    c_list: list of list of candidate sentences
+    c_list: list of list of candidate sentences (or tuples of sentence, set)
 
   Returns:
     List of tokens in ref representing union LCS.
   """
-  lcs_list = [lcs_ind(ref, c) for c in c_list]
+  lcs_list = []
+  for c in c_list:
+    if isinstance(c, tuple):
+      lcs_list.append(lcs_ind(ref, c[0], c[1]))
+    else:
+      lcs_list.append(lcs_ind(ref, c))
   return [ref[i] for i in _find_union(lcs_list)]
 
 
@@ -346,9 +367,9 @@ def _find_union(lcs_list):
   return sorted(list(set().union(*lcs_list)))
 
 
-def lcs_ind(ref, can):
+def lcs_ind(ref, can, can_set=None):
   """Returns one of the longest lcs."""
-  t = _lcs_table(ref, can)
+  t = _lcs_table(ref, can, can_set)
   return _backtrack_norec(t, ref, can)
 
 
