@@ -128,6 +128,15 @@ def test_instruction_following_loose(
       revised_response_remove_last,
       revised_response_remove_both,
   ]
+  # Bolt Optimization: Deduplicate candidate responses while preserving order and
+  # filter out empty candidates to avoid redundant checker evaluations.
+  unique_responses = []
+  seen = set()
+  for r in all_responses:
+    if r.strip() and r not in seen:
+      seen.add(r)
+      unique_responses.append(r)
+
   instruction_list = inp.instruction_id_list
   is_following_list = []
 
@@ -141,8 +150,8 @@ def test_instruction_following_loose(
       instruction.build_description(prompt=inp.prompt)
 
     is_following = False
-    for r in all_responses:
-      if r.strip() and instruction.check_following(r):
+    for r in unique_responses:
+      if instruction.check_following(r):
         is_following = True
         break
 
