@@ -122,15 +122,12 @@ def split_into_sentences(text):
   return sentences
 
 
-# Pre-compile word regex to avoid instantiating RegexpTokenizer on every call.
-_WORD_REGEX = re.compile(r"\w+")
+
 
 
 def count_words(text):
   """Counts the number of words."""
-  tokens = _WORD_REGEX.findall(text)
-  num_words = len(tokens)
-  return num_words
+
 
 
 @functools.lru_cache(maxsize=None)
