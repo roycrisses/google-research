@@ -128,6 +128,15 @@ def test_instruction_following_loose(
       revised_response_remove_last,
       revised_response_remove_both,
   ]
+  # Deduplicate response candidates while preserving order to avoid running
+  # expensive instruction checkers (e.g. language detection) on duplicate variants.
+  seen = set()
+  unique_responses = []
+  for r_cand in all_responses:
+    if r_cand not in seen:
+      seen.add(r_cand)
+      unique_responses.append(r_cand)
+
   instruction_list = inp.instruction_id_list
   is_following_list = []
 
@@ -141,7 +150,7 @@ def test_instruction_following_loose(
       instruction.build_description(prompt=inp.prompt)
 
     is_following = False
-    for r in all_responses:
+    for r in unique_responses:
       if r.strip() and instruction.check_following(r):
         is_following = True
         break
