@@ -90,6 +90,18 @@ _ALL_CAPITAL_WORD_FREQUENCY = 20
 _NUM_WORDS_LOWER_LIMIT = 100
 _NUM_WORDS_UPPER_LIMIT = 500
 
+# Pre-compiled module-level regex patterns for performance optimization.
+_PLACEHOLDER_PATTERN = re.compile(r"\[.*?\]")
+_BULLET_PATTERN_1 = re.compile(r"^\s*\*[^\*].*$", flags=re.MULTILINE)
+_BULLET_PATTERN_2 = re.compile(r"^\s*-.*$", flags=re.MULTILINE)
+_HIGHLIGHT_PATTERN = re.compile(r"\*[^\n\*]*\*")
+_DOUBLE_HIGHLIGHT_PATTERN = re.compile(r"\*\*[^\n\*]*\*\*")
+_PARAGRAPH_SPLIT_PATTERN = re.compile(r"\s?\*\*\*\s?")
+_ASTERISK_PATTERN = re.compile(r"\*.*\*")
+_WORD_PATTERN = re.compile(r"\w+")
+_TITLE_PATTERN = re.compile(r"<<[^\n]+>>")
+_CAPITAL_WORD_PATTERN = re.compile(r"\b[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*\b")
+
 
 class Instruction:
   """An instruction template."""
@@ -272,7 +284,7 @@ class PlaceholderChecker(Instruction):
       True if the actual number of placeholders in the response is greater than
       or equal to `num_placeholders`; otherwise, False.
     """
-    placeholders = re.findall(r"\[.*?\]", value)
+    placeholders = _PLACEHOLDER_PATTERN.findall(value)
     num_placeholders = len(placeholders)
     return num_placeholders >= self._num_placeholders
 
@@ -320,8 +332,8 @@ class BulletListChecker(Instruction):
       True if the actual number of bullet lists in the response meets the
       requirement.
     """
-    bullet_lists = re.findall(r"^\s*\*[^\*].*$", value, flags=re.MULTILINE)
-    bullet_lists_2 = re.findall(r"^\s*-.*$", value, flags=re.MULTILINE)
+    bullet_lists = _BULLET_PATTERN_1.findall(value)
+    bullet_lists_2 = _BULLET_PATTERN_2.findall(value)
     num_bullet_lists = len(bullet_lists) + len(bullet_lists_2)
     return num_bullet_lists == self._num_bullets
 
@@ -379,6 +391,9 @@ class ConstrainedStartChecker(Instruction):
     self._starter = starter.strip() if isinstance(starter, str) else starter
     if self._starter is None:
       self._starter = random.choice(_STARTER_OPTIONS)
+    self._starter_pattern = re.compile(
+        r"^\s*" + re.escape(self._starter) + r".*$", flags=re.MULTILINE
+    )
     self._description_pattern = (
         "During the conversation, when it is your turn, " +
         "please always start with {starter}")
@@ -402,9 +417,7 @@ class ConstrainedStartChecker(Instruction):
       True if the response starts with the given phrase or keyword that is
       contained in `instruction_args`; otherwise, False.
     """
-    response_pattern = r"^\s*" + self._starter + r".*$"
-    response_with_constrained_start = re.search(response_pattern, value,
-                                                flags=re.MULTILINE)
+    response_with_constrained_start = self._starter_pattern.search(value)
     return True if response_with_constrained_start else False
 
 
@@ -451,8 +464,8 @@ class HighlightSectionChecker(Instruction):
       *highlighed sections* meets the minimum requirement; otherwise False.
     """
     num_highlights = 0
-    highlights = re.findall(r"\*[^\n\*]*\*", value)
-    double_highlights = re.findall(r"\*\*[^\n\*]*\*\*", value)
+    highlights = _HIGHLIGHT_PATTERN.findall(value)
+    double_highlights = _DOUBLE_HIGHLIGHT_PATTERN.findall(value)
     for highlight in highlights:
       if highlight.strip("*").strip():
         num_highlights += 1
@@ -486,6 +499,10 @@ class SectionChecker(Instruction):
     self._num_sections = num_sections
     if self._num_sections is None or self._num_sections < 0:
       self._num_sections = random.randint(1, _NUM_SECTIONS)
+
+    self._section_splitter_pattern = re.compile(
+        r"\s?" + re.escape(self._section_spliter) + r"\s?\d+\s?"
+    )
 
     self._description_pattern = (
         "Your response must have {num_sections} sections. Mark the beginning " +
@@ -521,8 +538,7 @@ class SectionChecker(Instruction):
       True if the number of sections in the response is greater than or equal to
       the minimum number of sections; otherwise, False.
     """
-    section_splitter_patten = r"\s?" + self._section_spliter  + r"\s?\d+\s?"
-    sections = re.split(section_splitter_patten, value)
+    sections = self._section_splitter_pattern.split(value)
     num_sections = len(sections) - 1
     return num_sections >= self._num_sections
 
@@ -568,7 +584,7 @@ class ParagraphChecker(Instruction):
       True if the actual number of paragraphs is the same as required;
       otherwise, False.
     """
-    paragraphs = re.split(r"\s?\*\*\*\s?", value)
+    paragraphs = _PARAGRAPH_SPLIT_PATTERN.split(value)
     num_paragraphs = len(paragraphs)
 
     for index, paragraph in enumerate(paragraphs):
@@ -600,6 +616,14 @@ class PostscriptChecker(Instruction):
     if self._postscript_marker is None:
       self._postscript_marker = random.choice(_POSTSCRIPT_MARKER)
 
+    if self._postscript_marker == "P.P.S":
+      postscript_pattern = r"\s*p\.\s?p\.\s?s.*$"
+    elif self._postscript_marker == "P.S.":
+      postscript_pattern = r"\s*p\.\s?s\..*$"
+    else:
+      postscript_pattern = r"\s*" + re.escape(self._postscript_marker.lower()) + r".*$"
+    self._postscript_pattern = re.compile(postscript_pattern, flags=re.MULTILINE)
+
     self._description_pattern = (
         "At the end of your response, please explicitly add a postscript " +
         "starting with {postscript}")
@@ -626,13 +650,7 @@ class PostscriptChecker(Instruction):
       the keyword containing in the `instruction_args`; otherwise False.
     """
     value = value.lower()
-    if self._postscript_marker == "P.P.S":
-      postscript_pattern = r"\s*p\.\s?p\.\s?s.*$"
-    elif self._postscript_marker == "P.S.":
-      postscript_pattern = r"\s*p\.\s?s\..*$"
-    else:
-      postscript_pattern = r"\s*" + self._postscript_marker.lower() + r".*$"
-    postscript = re.findall(postscript_pattern, value, flags=re.MULTILINE)
+    postscript = self._postscript_pattern.findall(value)
     return True if postscript else False
 
 
@@ -693,11 +711,11 @@ class RephraseChecker(Instruction):
 
   def is_change(self, response):
     """Check if there is change in the response in the form of *change me*."""
-    return re.search(r"\*.*\*", response)
+    return _ASTERISK_PATTERN.search(response)
 
   def strip_changes(self, response):
     """Strips off the changes."""
-    return re.sub(r"\*.*\*", "", response)
+    return _ASTERISK_PATTERN.sub("", response)
 
 
 class KeywordChecker(Instruction):
@@ -721,6 +739,9 @@ class KeywordChecker(Instruction):
     else:
       self._keywords = keywords
     self._keywords = sorted(self._keywords)
+    self._keyword_patterns = [
+        re.compile(k, flags=re.IGNORECASE) for k in self._keywords
+    ]
 
     self._description_pattern = ("Include keywords {keywords} in the response.")
 
@@ -736,8 +757,8 @@ class KeywordChecker(Instruction):
 
   def check_following(self, value):
     """Check if the response contain the expected keywords."""
-    for keyword in self._keywords:
-      if not re.search(keyword, value, flags=re.IGNORECASE):
+    for pattern in self._keyword_patterns:
+      if not pattern.search(value):
         return False
     return True
 
@@ -780,6 +801,8 @@ class KeywordFrequencyChecker(Instruction):
     else:
       self._comparison_relation = relation
 
+    self._keyword_pattern = re.compile(self._keyword, flags=re.IGNORECASE)
+
     self._description_pattern = (
         "In your response, the word {keyword} should appear {relation} " +
         "{frequency} times.")
@@ -801,8 +824,7 @@ class KeywordFrequencyChecker(Instruction):
 
   def check_following(self, value):
     """Checks if the response contain the keyword with required frequency."""
-    actual_occurrences = len(re.findall(
-        self._keyword, value, flags=re.IGNORECASE))
+    actual_occurrences = len(self._keyword_pattern.findall(value))
 
     if self._comparison_relation == _COMPARISON_RELATION[0]:
       return actual_occurrences < self._frequency
@@ -975,7 +997,7 @@ class ParagraphFirstWordCheck(Instruction):
       word of the specified paragraph is the same as required. Otherwise, false.
     """
 
-    paragraphs = re.split(r"\n\n", value)
+    paragraphs = value.split("\n\n")
     num_paragraphs = len(paragraphs)
 
     for paragraph in paragraphs:
@@ -1088,6 +1110,10 @@ class ForbiddenWords(Instruction):
     else:
       self._forbidden_words = list(set(forbidden_words))
     self._forbidden_words = sorted(self._forbidden_words)
+    self._forbidden_words_patterns = [
+        re.compile(r"\b" + re.escape(word) + r"\b", flags=re.IGNORECASE)
+        for word in self._forbidden_words
+    ]
     self._description_pattern = (
         "Do not include keywords {forbidden_words} in the response."
     )
@@ -1106,8 +1132,8 @@ class ForbiddenWords(Instruction):
 
   def check_following(self, value):
     """Check if the response does not contain the expected keywords."""
-    for word in self._forbidden_words:
-      if re.search(r"\b" + word + r"\b", value, flags=re.IGNORECASE):
+    for pattern in self._forbidden_words_patterns:
+      if pattern.search(value):
         return False
     return True
 
@@ -1155,8 +1181,8 @@ class RephraseParagraph(Instruction):
     return ["original_paragraph", "low", "high"]
 
   def check_following(self, value):
-    val_words = re.findall(r"\w+", value.lower())
-    original_words = re.findall(r"\w+", self._original_paragraph.lower())
+    val_words = _WORD_PATTERN.findall(value.lower())
+    original_words = _WORD_PATTERN.findall(self._original_paragraph.lower())
     similar_words = 0
 
     dict_val = collections.Counter(val_words)
@@ -1303,9 +1329,7 @@ class TitleChecker(Instruction):
 
   def check_following(self, value):
     """Checks if the response contains a title."""
-    pattern = r"<<[^\n]+>>"
-    re_pattern = re.compile(pattern)
-    titles = re.findall(re_pattern, value)
+    titles = _TITLE_PATTERN.findall(value)
 
     for title in titles:
       if title.lstrip("<").rstrip(">").strip():
@@ -1383,12 +1407,12 @@ class LetterFrequencyChecker(Instruction):
   def check_following(self, value):
     """Checks that the response contains the letter at the right frequency."""
     value = value.lower()
-    letters = collections.Counter(value)
+    letter_count = value.count(self._letter)
 
     if self._comparison_relation == _COMPARISON_RELATION[0]:
-      return letters[self._letter] < self._frequency
+      return letter_count < self._frequency
     else:
-      return letters[self._letter] >= self._frequency
+      return letter_count >= self._frequency
 
 
 class CapitalLettersEnglishChecker(Instruction):
@@ -1473,7 +1497,7 @@ class CommaChecker(Instruction):
 
   def check_following(self, value):
     """Checks that the response does not contain commas."""
-    return not re.search(r"\,", value)
+    return "," not in value
 
 
 class CapitalWordFrequencyChecker(Instruction):
@@ -1531,10 +1555,8 @@ class CapitalWordFrequencyChecker(Instruction):
   def check_following(self, value):
     """Checks the frequency of words with all capital letters."""
     # Hyphenated words will count as one word
-    words = instructions_util.nltk.word_tokenize(value)
-    capital_words = [word for word in words if word.isupper()]
-
-    capital_words = len(capital_words)
+    words = _CAPITAL_WORD_PATTERN.findall(value)
+    capital_words = sum(1 for word in words if word.isupper())
 
     if self._comparison_relation == _COMPARISON_RELATION[0]:
       return capital_words < self._frequency
