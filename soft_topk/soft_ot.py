@@ -26,47 +26,41 @@ import torch.nn.functional as F
 
 
 def sinkhorn_forward(C, mu, nu, epsilon, max_iter):
-    """standard forward of sinkhorn."""
+    """standard forward of sinkhorn optimized with batched matmul."""
 
     bs, _, k_ = C.size()
 
-    v = torch.ones([bs, 1, k_])/(k_)
-    G = torch.exp(-C/epsilon)
-    if torch.cuda.is_available():
-        v = v.cuda()
+    v = torch.full((bs, 1, k_), 1.0 / k_, device=C.device)
+    G = torch.exp(-C / epsilon)
 
     for _ in range(max_iter):
-        u = mu/(G*v).sum(-1, keepdim=True)
-        v = nu/(G*u).sum(-2, keepdim=True)
+        # Optimized: Replace element-wise broadcasting (G * v).sum(-1) with batched matmul (G @ v^T)
+        u = mu / (G @ v.transpose(-1, -2))
+        # Optimized: Replace element-wise broadcasting (G * u).sum(-2) with batched matmul (u^T @ G)
+        v = nu / (u.transpose(-1, -2) @ G)
 
-    Gamma = u*G*v
+    Gamma = u * G * v
     return Gamma
 
 
 def sinkhorn_forward_stablized(C, mu, nu, epsilon, max_iter):
-    """sinkhorn forward in log space."""
+    """sinkhorn forward in log space optimized with precomputed constants and efficient logsumexp."""
 
     bs, n, k_ = C.size()
-    k = k_-1
 
-    f = torch.zeros([bs, n, 1])
-    g = torch.zeros([bs, 1, k+1])
-    if torch.cuda.is_available():
-        f = f.cuda()
-        g = g.cuda()
-    epsilon_log_mu = epsilon*torch.log(mu)
-    epsilon_log_nu = epsilon*torch.log(nu)
-    def min_epsilon_row(Z, epsilon):
-        return -epsilon*torch.logsumexp((-Z)/epsilon, -1, keepdim=True)
+    f = torch.zeros([bs, n, 1], device=C.device)
+    g = torch.zeros([bs, 1, k_], device=C.device)
 
-    def min_epsilon_col(Z, epsilon):
-        return -epsilon*torch.logsumexp((-Z)/epsilon, -2, keepdim=True)
+    # Precompute reciprocal and log constants outside loop to avoid repeated computation and allocations
+    inv_eps = 1.0 / epsilon
+    eps_log_mu = epsilon * torch.log(mu)
+    eps_log_nu = epsilon * torch.log(nu)
 
     for _ in range(max_iter):
-        f = min_epsilon_row(C-g, epsilon)+epsilon_log_mu
-        g = min_epsilon_col(C-f, epsilon)+epsilon_log_nu
+        f = -epsilon * torch.logsumexp((g - C) * inv_eps, -1, keepdim=True) + eps_log_mu
+        g = -epsilon * torch.logsumexp((f - C) * inv_eps, -2, keepdim=True) + eps_log_nu
 
-    Gamma = torch.exp((-C+f+g)/epsilon)
+    Gamma = torch.exp((-C + f + g) * inv_eps)
     return Gamma
 
 
@@ -206,30 +200,21 @@ class TopK_stablized(torch.nn.Module):
 
         C = (scores-self.anchors)**2
         C = C / (C.max().detach())
-        f = torch.zeros([bs, 1, n])
-        g = torch.zeros([bs, 2, 1])
-        mu = torch.ones([1, 1, n], requires_grad=False)/n
-        nu = torch.FloatTensor([self.k/n, (n-self.k)/n]).view([1, 2, 1])
+        f = torch.zeros([bs, 1, n], device=scores.device)
+        g = torch.zeros([bs, 2, 1], device=scores.device)
+        mu = torch.ones([1, 1, n], requires_grad=False, device=scores.device)/n
+        nu = torch.tensor([self.k/n, (n-self.k)/n], device=scores.device).view([1, 2, 1])
 
-        if torch.cuda.is_available():
-            f = f.cuda()
-            g = g.cuda()
-            mu = mu.cuda()
-            nu = nu.cuda()
-
-        def min_epsilon_row(Z, epsilon):
-            return -epsilon*torch.logsumexp((-Z)/epsilon, -1, keepdim=True)
-
-
-        def min_epsilon_col(Z, epsilon):
-            return -epsilon*torch.logsumexp((-Z)/epsilon, -2, keepdim=True)
-
+        # Precompute reciprocal and constant log terms outside loop
+        inv_eps = 1.0 / self.epsilon
+        eps_log_mu = self.epsilon * torch.log(mu)
+        eps_log_nu = self.epsilon * torch.log(nu)
 
         for i in range(self.max_iter):
-            f = min_epsilon_col(C-f-g, self.epsilon)+f+self.epsilon*torch.log(mu)
-            g = min_epsilon_row(C-f-g, self.epsilon)+ g +self.epsilon*torch.log(nu)
+            f = -self.epsilon * torch.logsumexp((g - C) * inv_eps, -2, keepdim=True) + eps_log_mu
+            g = -self.epsilon * torch.logsumexp((f - C) * inv_eps, -1, keepdim=True) + eps_log_nu
 
-        P = torch.exp((-C+f+g)/self.epsilon)
+        P = torch.exp((-C + f + g) * inv_eps)
         A = P[:,0,:]*n
         return A
 
