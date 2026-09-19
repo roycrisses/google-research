@@ -15,6 +15,7 @@
 
 """Smith-Waterman functions for protein alignment in NumPy."""
 
+import math
 from typing import Optional
 
 import numpy as np
@@ -79,19 +80,82 @@ def alignment_matrices(len_1, len_2):
 
 def _make_op(temperature=1.0):
   """Make softmax + softargmax operator."""
-  def op(*args):
-    if len(args) == 1:  # op(arr)
-      arr = np.array(args[0])
-    else:  # lse_op(ele1, ele2, ...)
-      arr = np.array(args)
-    if temperature > 0:
-      return (temperature * special.logsumexp(arr / temperature),
-              special.softmax(arr / temperature))
-    else:
-      ret = np.zeros_like(arr)
-      ret[np.argmax(arr)] = 1
-      return np.max(arr), ret
-  return op
+  # Optimized logsumexp and softmax for inner loop execution avoiding
+  # expensive SciPy array wrapper overhead and redundant passes.
+  if temperature > 0:
+    inv_temp = 1.0 / temperature
+    def op(*args):
+      if len(args) == 1:  # op(arr)
+        arr = np.asarray(args[0])
+        m = np.max(arr)
+        e = np.exp((arr - m) * inv_temp)
+        s = np.sum(e)
+        return m + temperature * np.log(s), e / s
+      elif len(args) == 2:
+        a0, a1 = args[0], args[1]
+        m = a0 if a0 > a1 else a1
+        e0 = math.exp((a0 - m) * inv_temp)
+        e1 = math.exp((a1 - m) * inv_temp)
+        s = e0 + e1
+        return m + temperature * math.log(s), (e0 / s, e1 / s)
+      elif len(args) == 3:
+        a0, a1, a2 = args[0], args[1], args[2]
+        m = a0 if a0 >= a1 and a0 >= a2 else (a1 if a1 >= a2 else a2)
+        e0 = math.exp((a0 - m) * inv_temp)
+        e1 = math.exp((a1 - m) * inv_temp)
+        e2 = math.exp((a2 - m) * inv_temp)
+        s = e0 + e1 + e2
+        return m + temperature * math.log(s), (e0 / s, e1 / s, e2 / s)
+      elif len(args) == 4:
+        a0, a1, a2, a3 = args[0], args[1], args[2], args[3]
+        m = a0 if a0 >= a1 and a0 >= a2 and a0 >= a3 else (a1 if a1 >= a2 and a1 >= a3 else (a2 if a2 >= a3 else a3))
+        e0 = math.exp((a0 - m) * inv_temp)
+        e1 = math.exp((a1 - m) * inv_temp)
+        e2 = math.exp((a2 - m) * inv_temp)
+        e3 = math.exp((a3 - m) * inv_temp)
+        s = e0 + e1 + e2 + e3
+        return m + temperature * math.log(s), (e0 / s, e1 / s, e2 / s, e3 / s)
+      else:
+        arr = np.array(args)
+        m = np.max(arr)
+        e = np.exp((arr - m) * inv_temp)
+        s = np.sum(e)
+        return m + temperature * np.log(s), e / s
+    return op
+  else:
+    def op(*args):
+      if len(args) == 1:
+        arr = np.asarray(args[0])
+        ret = np.zeros_like(arr)
+        ret[np.argmax(arr)] = 1
+        return np.max(arr), ret
+      elif len(args) == 2:
+        a0, a1 = args[0], args[1]
+        return (a0, (1.0, 0.0)) if a0 >= a1 else (a1, (0.0, 1.0))
+      elif len(args) == 3:
+        a0, a1, a2 = args[0], args[1], args[2]
+        if a0 >= a1 and a0 >= a2:
+          return a0, (1.0, 0.0, 0.0)
+        elif a1 >= a2:
+          return a1, (0.0, 1.0, 0.0)
+        else:
+          return a2, (0.0, 0.0, 1.0)
+      elif len(args) == 4:
+        a0, a1, a2, a3 = args[0], args[1], args[2], args[3]
+        if a0 >= a1 and a0 >= a2 and a0 >= a3:
+          return a0, (1.0, 0.0, 0.0, 0.0)
+        elif a1 >= a2 and a1 >= a3:
+          return a1, (0.0, 1.0, 0.0, 0.0)
+        elif a2 >= a3:
+          return a2, (0.0, 0.0, 1.0, 0.0)
+        else:
+          return a3, (0.0, 0.0, 0.0, 1.0)
+      else:
+        arr = np.array(args)
+        ret = np.zeros_like(arr)
+        ret[np.argmax(arr)] = 1
+        return np.max(arr), ret
+    return op
 
 
 def _soft_sw_affine(sim_mat,
@@ -172,17 +236,13 @@ def _soft_sw_affine(sim_mat,
                        gap_y_e[i+1, j] * gap_y_p[i+1, j, 0] +
                        probas[i, j])
 
-  g_sim_mat = np.zeros_like(sim_mat)
-  g_gap_open = np.zeros_like(sim_mat)
-  g_gap_extend = np.zeros_like(sim_mat)
-  for i in range(1, len_1 + 1):
-    for j in range(1, len_2 + 1):
-      g_sim_mat[i-1, j-1] = match_e[i, j]
-      g_gap_open[i-1, j-1] = (gap_x_e[i, j+1] * (-gap_x_p[i, j+1, 0]) +
-                              gap_y_e[i+1, j] * (-gap_y_p[i+1, j, 0] -
-                                                 gap_y_p[i+1, j, 1]))
-      g_gap_extend[i-1, j-1] = (gap_x_e[i, j+1] * (-gap_x_p[i, j+1, 1]) +
-                                gap_y_e[i+1, j] * (-gap_y_p[i+1, j, 2]))
+  # Vectorized gradient calculation avoiding Python double loops.
+  g_sim_mat = match_e[1:len_1+1, 1:len_2+1].copy()
+  g_gap_open = (gap_x_e[1:len_1+1, 2:len_2+2] * (-gap_x_p[1:len_1+1, 2:len_2+2, 0]) +
+                gap_y_e[2:len_1+2, 1:len_2+1] * (-gap_y_p[2:len_1+2, 1:len_2+1, 0] -
+                                                 gap_y_p[2:len_1+2, 1:len_2+1, 1]))
+  g_gap_extend = (gap_x_e[1:len_1+1, 2:len_2+2] * (-gap_x_p[1:len_1+1, 2:len_2+2, 1]) +
+                  gap_y_e[2:len_1+2, 1:len_2+1] * (-gap_y_p[2:len_1+2, 1:len_2+1, 2]))
 
   return value, g_sim_mat, np.sum(g_gap_open), np.sum(g_gap_extend)
 

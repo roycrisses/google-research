@@ -1,3 +1,7 @@
 ## 2025-05-22 - ROUGE LCS Algorithmic Optimizations
 **Learning:** The default ROUGE LCS implementation suffered from several performance anti-patterns in Python: O(M*N) memory usage for simple length checks, O(N^2) list building using `insert(0, ...)`, and redundant O(M*N) DP calculations for disjoint token sequences or non-overlapping sentences in summaries.
 **Action:** Always use space-optimized DP ($O(\min(M, N))$) when only the length is needed. Use `append()` + `reverse()` for efficient list building. Implement fast-path checks using `set` intersections to bypass expensive algorithms. Pre-calculate sets in loops to avoid redundant conversions. Use local variable lookups and conditional expressions instead of `max()` in tight loops.
+
+## 2025-05-23 - SciPy Dispatch Overhead in Inner DP Loops (Dedal)
+**Learning:** Calling `scipy.special.logsumexp` or `scipy.special.softmax` inside tight dynamic programming inner loops on small fixed-size argument lists (e.g. 2, 3, or 4 scalar values) introduces huge performance overhead due to Python object allocations (`np.array`), SciPy Array API dispatching logic, and redundant max/exp passes.
+**Action:** For small fixed-cardinality inputs inside hot loops, replace SciPy calls with direct scalar math using `math.exp` and `math.log` with max-subtraction. Also, replace post-loop gradient collection double loops with vectorized NumPy slice arithmetic.
