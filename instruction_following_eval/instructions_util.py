@@ -68,6 +68,20 @@ _WEBSITES = "[.](com|net|org|io|gov|edu|me)"
 _DIGITS = "([0-9])"
 _MULTIPLE_DOTS = r"\.{2,}"
 
+_PREFIXES_RE = re.compile(_PREFIXES)
+_WEBSITES_RE = re.compile(_WEBSITES)
+_DIGITS_RE = re.compile(_DIGITS + r"[.]" + _DIGITS)
+_MULTIPLE_DOTS_RE = re.compile(_MULTIPLE_DOTS)
+_SINGLE_LETTER_SPACE_RE = re.compile(r"\s" + _ALPHABETS + r"[.] ")
+_ACRONYMS_STARTERS_RE = re.compile(_ACRONYMS + r" " + _STARTERS)
+_THREE_DOTS_RE = re.compile(
+    _ALPHABETS + r"[.]" + _ALPHABETS + r"[.]" + _ALPHABETS + r"[.]"
+)
+_TWO_DOTS_RE = re.compile(_ALPHABETS + r"[.]" + _ALPHABETS + r"[.]")
+_SUFFIXES_STARTERS_RE = re.compile(r" " + _SUFFIXES + r"[.] " + _STARTERS)
+_SUFFIXES_RE = re.compile(r" " + _SUFFIXES + r"[.]")
+_ALPHABETS_RE = re.compile(r" " + _ALPHABETS + r"[.]")
+
 
 def split_into_sentences(text):
   """Split the text into sentences.
@@ -78,31 +92,29 @@ def split_into_sentences(text):
   Returns:
     A list of strings where each string is a sentence.
   """
+  # Fast-path: if string contains no sentence-ending punctuation, return immediately.
+  if "." not in text and "?" not in text and "!" not in text:
+    s = text.replace("\n", " ").strip()
+    return [s] if s else []
+
   text = " " + text + "  "
   text = text.replace("\n", " ")
-  text = re.sub(_PREFIXES, "\\1<prd>", text)
-  text = re.sub(_WEBSITES, "<prd>\\1", text)
-  text = re.sub(_DIGITS + "[.]" + _DIGITS, "\\1<prd>\\2", text)
-  text = re.sub(
-      _MULTIPLE_DOTS,
+  text = _PREFIXES_RE.sub(r"\1<prd>", text)
+  text = _WEBSITES_RE.sub(r"<prd>\1", text)
+  text = _DIGITS_RE.sub(r"\1<prd>\2", text)
+  text = _MULTIPLE_DOTS_RE.sub(
       lambda match: "<prd>" * len(match.group(0)) + "<stop>",
       text,
   )
   if "Ph.D" in text:
     text = text.replace("Ph.D.", "Ph<prd>D<prd>")
-  text = re.sub(r"\s" + _ALPHABETS + "[.] ", " \\1<prd> ", text)
-  text = re.sub(_ACRONYMS + " " + _STARTERS, "\\1<stop> \\2", text)
-  text = re.sub(
-      _ALPHABETS + "[.]" + _ALPHABETS + "[.]" + _ALPHABETS + "[.]",
-      "\\1<prd>\\2<prd>\\3<prd>",
-      text,
-  )
-  text = re.sub(
-      _ALPHABETS + "[.]" + _ALPHABETS + "[.]", "\\1<prd>\\2<prd>", text
-  )
-  text = re.sub(" " + _SUFFIXES + "[.] " + _STARTERS, " \\1<stop> \\2", text)
-  text = re.sub(" " + _SUFFIXES + "[.]", " \\1<prd>", text)
-  text = re.sub(" " + _ALPHABETS + "[.]", " \\1<prd>", text)
+  text = _SINGLE_LETTER_SPACE_RE.sub(r" \1<prd> ", text)
+  text = _ACRONYMS_STARTERS_RE.sub(r"\1<stop> \2", text)
+  text = _THREE_DOTS_RE.sub(r"\1<prd>\2<prd>\3<prd>", text)
+  text = _TWO_DOTS_RE.sub(r"\1<prd>\2<prd>", text)
+  text = _SUFFIXES_STARTERS_RE.sub(r" \1<stop> \2", text)
+  text = _SUFFIXES_RE.sub(r" \1<prd>", text)
+  text = _ALPHABETS_RE.sub(r" \1<prd>", text)
   if "”" in text:
     text = text.replace(".”", "”.")
   if '"' in text:
