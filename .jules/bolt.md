@@ -1,3 +1,7 @@
 ## 2025-05-22 - ROUGE LCS Algorithmic Optimizations
 **Learning:** The default ROUGE LCS implementation suffered from several performance anti-patterns in Python: O(M*N) memory usage for simple length checks, O(N^2) list building using `insert(0, ...)`, and redundant O(M*N) DP calculations for disjoint token sequences or non-overlapping sentences in summaries.
 **Action:** Always use space-optimized DP ($O(\min(M, N))$) when only the length is needed. Use `append()` + `reverse()` for efficient list building. Implement fast-path checks using `set` intersections to bypass expensive algorithms. Pre-calculate sets in loops to avoid redundant conversions. Use local variable lookups and conditional expressions instead of `max()` in tight loops.
+
+## 2025-05-23 - IFEval Instruction Checker Regex Optimization Safeguards
+**Learning:** Combining forbidden word lists into a single alternation regex `r"\b(?:" + "|".join(...) + r")\b"` fails when the list is empty because `r"\b(?:\b)"` matches every word boundary. Furthermore, in benchmark evaluation suites like IFEval, replacing standard NLTK tokenizers with custom regexes risks changing tokenization rules (e.g. contractions and punctuation) and altering benchmark scoring criteria.
+**Action:** Always guard against empty lists before constructing alternation regexes (`if self._forbidden_words:`). Preserve core NLTK tokenization in evaluation metrics while optimizing regex compilations, string lookups (`in`, `.count()`), and invariant pre-computations.
