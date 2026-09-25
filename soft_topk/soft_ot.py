@@ -44,23 +44,24 @@ def sinkhorn_forward(C, mu, nu, epsilon, max_iter):
 
 
 def sinkhorn_forward_stablized(C, mu, nu, epsilon, max_iter):
-    """sinkhorn forward in log space optimized with precomputed constants and efficient logsumexp."""
+    """sinkhorn forward in log space optimized with precomputed constants and scaled potentials."""
 
     bs, n, k_ = C.size()
 
-    f = torch.zeros([bs, n, 1], device=C.device)
-    g = torch.zeros([bs, 1, k_], device=C.device)
+    # Operate on scaled potentials f_hat = f / epsilon, g_hat = g / epsilon to eliminate
+    # inner-loop multiplications by inv_eps/epsilon and subtractions of C.
+    f_hat = torch.zeros([bs, n, 1], device=C.device, dtype=C.dtype)
+    g_hat = torch.zeros([bs, 1, k_], device=C.device, dtype=C.dtype)
 
-    # Precompute reciprocal and log constants outside loop to avoid repeated computation and allocations
-    inv_eps = 1.0 / epsilon
-    eps_log_mu = epsilon * torch.log(mu)
-    eps_log_nu = epsilon * torch.log(nu)
+    C_hat = -C / epsilon
+    log_mu = torch.log(mu)
+    log_nu = torch.log(nu)
 
     for _ in range(max_iter):
-        f = -epsilon * torch.logsumexp((g - C) * inv_eps, -1, keepdim=True) + eps_log_mu
-        g = -epsilon * torch.logsumexp((f - C) * inv_eps, -2, keepdim=True) + eps_log_nu
+        f_hat = -torch.logsumexp(g_hat + C_hat, -1, keepdim=True) + log_mu
+        g_hat = -torch.logsumexp(f_hat + C_hat, -2, keepdim=True) + log_nu
 
-    Gamma = torch.exp((-C + f + g) * inv_eps)
+    Gamma = torch.exp(C_hat + f_hat + g_hat)
     return Gamma
 
 
@@ -136,11 +137,8 @@ class TopK_custom(torch.nn.Module):
         super(TopK_custom, self).__init__()
         self.k = k
         self.epsilon = epsilon
-        self.anchors = torch.FloatTensor([0,1]).view([1,1, 2])
+        self.register_buffer('anchors', torch.tensor([0.0, 1.0]).view([1, 1, 2]))
         self.max_iter = max_iter
-
-        if torch.cuda.is_available():
-            self.anchors = self.anchors.cuda()
 
     def forward(self, scores):
         bs, n = scores.size()
@@ -157,16 +155,11 @@ class TopK_custom(torch.nn.Module):
 
         C = (scores-self.anchors)**2
         C = C / (C.max().detach())
-        #print(C)
-        mu = torch.ones([1, n, 1], requires_grad=False)/n
-        nu = torch.FloatTensor([self.k/n, (n-self.k)/n]).view([1, 1, 2])
 
-        if torch.cuda.is_available():
-            mu = mu.cuda()
-            nu = nu.cuda()
+        mu = torch.ones([1, n, 1], requires_grad=False, device=scores.device, dtype=scores.dtype) / n
+        nu = torch.tensor([self.k / n, (n - self.k) / n], device=scores.device, dtype=scores.dtype).view([1, 1, 2])
 
         Gamma = TopKFunc1.apply(C, mu, nu, self.epsilon, self.max_iter)
-        #print(Gamma)
         A = Gamma[:,:,0]*n
 
         return A
@@ -179,11 +172,8 @@ class TopK_stablized(torch.nn.Module):
         super(TopK_stablized, self).__init__()
         self.k = k
         self.epsilon = epsilon
-        self.anchors = torch.FloatTensor([0,1]).view([1,2,1])
+        self.register_buffer('anchors', torch.tensor([0.0, 1.0]).view([1, 2, 1]))
         self.max_iter = max_iter
-
-        if torch.cuda.is_available():
-            self.anchors = self.anchors.cuda()
 
     def forward(self, scores):
         bs, n = scores.size()[:2]
@@ -200,21 +190,21 @@ class TopK_stablized(torch.nn.Module):
 
         C = (scores-self.anchors)**2
         C = C / (C.max().detach())
-        f = torch.zeros([bs, 1, n], device=scores.device)
-        g = torch.zeros([bs, 2, 1], device=scores.device)
-        mu = torch.ones([1, 1, n], requires_grad=False, device=scores.device)/n
-        nu = torch.tensor([self.k/n, (n-self.k)/n], device=scores.device).view([1, 2, 1])
 
-        # Precompute reciprocal and constant log terms outside loop
-        inv_eps = 1.0 / self.epsilon
-        eps_log_mu = self.epsilon * torch.log(mu)
-        eps_log_nu = self.epsilon * torch.log(nu)
+        f_hat = torch.zeros([bs, 1, n], device=scores.device, dtype=scores.dtype)
+        g_hat = torch.zeros([bs, 2, 1], device=scores.device, dtype=scores.dtype)
+        mu = torch.ones([1, 1, n], requires_grad=False, device=scores.device, dtype=scores.dtype) / n
+        nu = torch.tensor([self.k / n, (n - self.k) / n], device=scores.device, dtype=scores.dtype).view([1, 2, 1])
+
+        C_hat = -C / self.epsilon
+        log_mu = torch.log(mu)
+        log_nu = torch.log(nu)
 
         for i in range(self.max_iter):
-            f = -self.epsilon * torch.logsumexp((g - C) * inv_eps, -2, keepdim=True) + eps_log_mu
-            g = -self.epsilon * torch.logsumexp((f - C) * inv_eps, -1, keepdim=True) + eps_log_nu
+            f_hat = -torch.logsumexp(g_hat + C_hat, -2, keepdim=True) + log_mu
+            g_hat = -torch.logsumexp(f_hat + C_hat, -1, keepdim=True) + log_nu
 
-        P = torch.exp((-C + f + g) * inv_eps)
+        P = torch.exp(C_hat + f_hat + g_hat)
         A = P[:,0,:]*n
         return A
 

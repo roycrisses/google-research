@@ -1,3 +1,7 @@
 ## 2025-05-22 - ROUGE LCS Algorithmic Optimizations
 **Learning:** The default ROUGE LCS implementation suffered from several performance anti-patterns in Python: O(M*N) memory usage for simple length checks, O(N^2) list building using `insert(0, ...)`, and redundant O(M*N) DP calculations for disjoint token sequences or non-overlapping sentences in summaries.
 **Action:** Always use space-optimized DP ($O(\min(M, N))$) when only the length is needed. Use `append()` + `reverse()` for efficient list building. Implement fast-path checks using `set` intersections to bypass expensive algorithms. Pre-calculate sets in loops to avoid redundant conversions. Use local variable lookups and conditional expressions instead of `max()` in tight loops.
+
+## 2025-05-23 - Log-Domain Sinkhorn Potential Scaling Optimization
+**Learning:** Log-space Sinkhorn potential updates of the form `f = -epsilon * logsumexp((g - C) / epsilon) + epsilon * log(mu)` execute redundant tensor subtractions `- C` and scalar multiplications `* (1 / epsilon)` inside hot iteration loops. Reformulating updates using scaled potentials `f_hat = f / epsilon`, `g_hat = g / epsilon`, and precomputing `C_hat = -C / epsilon` reduces inner loop ops to a single addition `f_hat = -logsumexp(g_hat + C_hat) + log_mu`.
+**Action:** Scale dual variables to eliminate scalar factor divisions and tensor subtractions in iterative log-domain Optimal Transport implementations.
