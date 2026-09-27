@@ -45,15 +45,16 @@ def sparse_soft_topk_mask_pav(x, k, l=1e-1, p=4 / 3, bisect_max_iter=50):
   if x.ndim > 1:
     x = jnp.reshape(x, (-1, x_shape[-1]))
   n = x.shape[-1]
+  # Optimize vector permutation from O(N^2) one_hot + einsum to O(N) indexing via take_along_axis
   perm = jax.lax.stop_gradient(jnp.argsort(-x, axis=-1))
-  P = jax.nn.one_hot(perm, n)
   w = jnp.pad(jnp.ones((k,)), (0, n - k))
-  s = jnp.einsum('...ab,...b->...a', P, x)
+  s = jnp.take_along_axis(x, perm, axis=-1)
   out_pav = isotonic_pav.isotonic_mask_pav(
       s, w, l=l, p=p, bisect_max_iter=bisect_max_iter
   )
   out = ((s - out_pav) / l) ** (q - 1)
-  return (jnp.einsum('...ba,...b->...a', P, out)).reshape(x_shape)
+  inv_perm = jnp.argsort(perm, axis=-1)
+  return jnp.take_along_axis(out, inv_perm, axis=-1).reshape(x_shape)
 
 
 @functools.partial(jax.jit, static_argnums=(1, 2, 3, 4))
@@ -78,15 +79,16 @@ def sparse_soft_topk_mag_pav(x, k, l=1e-1, p=4 / 3, bisect_max_iter=50):
   if x.ndim > 1:
     x = jnp.reshape(x, (-1, x_shape[-1]))
   n = x.shape[-1]
+  # Optimize vector permutation from O(N^2) one_hot + einsum to O(N) indexing via take_along_axis
   perm = jax.lax.stop_gradient(jnp.argsort(-jnp.absolute(x), axis=-1))
-  P = jax.nn.one_hot(perm, n)
   w = jnp.pad(jnp.ones((k,)), (0, n - k))
-  s = jnp.einsum('...ab,...b->...a', P, jnp.absolute(x))
+  s = jnp.take_along_axis(jnp.absolute(x), perm, axis=-1)
   out_pav = isotonic_pav.isotonic_mag_pav(
       s, w, l=l, p=p, bisect_max_iter=bisect_max_iter
   )
   out = ((s - out_pav) / l) ** (q - 1)
-  perm_out = jnp.einsum('...ba,...b->...a', P, out)
+  inv_perm = jnp.argsort(perm, axis=-1)
+  perm_out = jnp.take_along_axis(out, inv_perm, axis=-1)
   return (jnp.sign(x) * (perm_out + perm_out ** (1 / (q - 1)) * l)).reshape(
       x_shape
   )
@@ -104,14 +106,15 @@ def sparse_soft_topk_mask_dykstra(x, k, l=1e-1, num_iter=500):
   Returns:
     sol: the relaxed top-k mask of x.
   """
+  # Optimize permutation from O(N^2) matrix multiplication to O(N) indexing via take_along_axis
   n = x.shape[0]
-  perm = jax.lax.stop_gradient(jnp.argsort(-x))
-  P = jax.nn.one_hot(perm, n)
-  s = P @ x
+  perm = jax.lax.stop_gradient(jnp.argsort(-x, axis=-1))
+  s = jnp.take_along_axis(x, perm, axis=-1)
   s_w = s - l * jnp.pad(jnp.ones((k,)), (0, n - k))
   out_dykstra = isotonic_dykstra.isotonic_dykstra_mask(s_w, num_iter=num_iter)
   out = (s - out_dykstra) / l
-  return P.T @ out
+  inv_perm = jnp.argsort(perm, axis=-1)
+  return jnp.take_along_axis(out, inv_perm, axis=-1)
 
 
 def sparse_soft_topk_mag_dykstra(x, k, l=1e-1, num_iter=500):
@@ -126,16 +129,17 @@ def sparse_soft_topk_mag_dykstra(x, k, l=1e-1, num_iter=500):
   Returns:
     sol: the relaxed top-k in magnitude of x.
   """
+  # Optimize permutation from O(N^2) matrix multiplication to O(N) indexing via take_along_axis
   n = x.shape[0]
-  perm = jax.lax.stop_gradient(jnp.argsort(-jnp.absolute(x)))
-  P = jax.nn.one_hot(perm, n)
-  s = P @ jnp.absolute(x)
+  perm = jax.lax.stop_gradient(jnp.argsort(-jnp.absolute(x), axis=-1))
+  s = jnp.take_along_axis(jnp.absolute(x), perm, axis=-1)
   w = jnp.pad(jnp.ones((k,)), (0, n - k))
   out_dykstra = isotonic_dykstra.isotonic_dykstra_mag(
       s / (1 + l * w), w, l=l, num_iter=num_iter
   )
   out = (s - out_dykstra) / l
-  perm_out = P.T @ out
+  inv_perm = jnp.argsort(perm, axis=-1)
+  perm_out = jnp.take_along_axis(out, inv_perm, axis=-1)
   return jnp.sign(x) * perm_out * (1 + l)
 
 

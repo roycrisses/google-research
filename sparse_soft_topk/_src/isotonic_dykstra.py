@@ -86,9 +86,8 @@ def isotonic_dykstra_mask(s, num_iter=500):
 
 
 def _cumsum_einsum(x, precision=jax.lax.Precision.DEFAULT):
-  """A faster cumsum, for vectors of size < 8192."""
-  mask = jnp.triu(jnp.ones(x.shape, dtype=jnp.bool_))
-  return jnp.einsum("ij,jk", x, mask, precision=precision)
+  """Vectorized cumulative sum along second axis."""
+  return jnp.cumsum(x, axis=1)
 
 
 def _jvp_isotonic_mask(solution, vector, eps=1e-4):
