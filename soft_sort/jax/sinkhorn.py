@@ -34,7 +34,8 @@ def error(cost, f, g, eps, b):
 
 
 def transport(cost, f, g, eps):
-  return np.exp(-center(cost, f, g) / eps)
+  inv_eps = 1.0 / eps
+  return np.exp((f[:, :, np.newaxis] + g[:, np.newaxis, :] - cost) * inv_eps)
 
 
 def cost_fn(x, y, power):
@@ -44,7 +45,8 @@ def cost_fn(x, y, power):
     cost = np.abs(delta)
     derivative = np.sign(delta)
   elif power == 2.0:
-    cost = delta ** 2.0
+    # Bolt optimization: np.square is significantly faster than delta ** 2.0 in JAX.
+    cost = np.square(delta)
     derivative = 2.0 * delta
   else:
     abs_diff = np.abs(delta)
@@ -99,11 +101,16 @@ def sinkhorn_iterations(x,
   iterations = 0
   eps = epsilon_0
   while (iterations < max_iterations) and (err >= threshold or eps > epsilon):
+    inv_eps = 1.0 / eps
     for _ in range(inner_iterations):
       iterations += 1
-      g = eps * logb + softmin(cost, f, g, eps, axis=1) + g
-      f = eps * loga + softmin(cost, f, g, eps, axis=2) + f
+      # Bolt optimization: simplify softmin calculation into a direct logsumexp
+      # with inv_eps multiplication, eliminating redundant center array overhead
+      # and floating-point divisions on large batch matrices.
+      g = eps * (logb - scipy.special.logsumexp((f[:, :, np.newaxis] - cost) * inv_eps, axis=1))
+      f = eps * (loga - scipy.special.logsumexp((g[:, np.newaxis, :] - cost) * inv_eps, axis=2))
       eps = max(eps * epsilon_decay, epsilon)
+      inv_eps = 1.0 / eps
 
     if eps <= epsilon:
       err = error(cost, f, g, eps, b)
