@@ -1,3 +1,7 @@
 ## 2025-05-22 - ROUGE LCS Algorithmic Optimizations
 **Learning:** The default ROUGE LCS implementation suffered from several performance anti-patterns in Python: O(M*N) memory usage for simple length checks, O(N^2) list building using `insert(0, ...)`, and redundant O(M*N) DP calculations for disjoint token sequences or non-overlapping sentences in summaries.
 **Action:** Always use space-optimized DP ($O(\min(M, N))$) when only the length is needed. Use `append()` + `reverse()` for efficient list building. Implement fast-path checks using `set` intersections to bypass expensive algorithms. Pre-calculate sets in loops to avoid redundant conversions. Use local variable lookups and conditional expressions instead of `max()` in tight loops.
+
+## 2025-05-23 - ROUGE Tokenization and Stem Caching Optimization
+**Learning:** `re.sub` followed by `re.split` creates unnecessary intermediate string allocations, and re-validating tokens with `re.match` on every single word is an O(N) regex overhead. Additionally, PorterStemmer is deterministic, so calling `stemmer.stem()` repeatedly on frequent words in large corpora re-evaluates rules unnecessarily.
+**Action:** Use `re.compile(r"[a-z0-9]+").findall(text)` to extract lower-case alphanumeric tokens directly in a single regex operation. Cache stemming results on the stemmer instance (`stemmer._stem_cache`) to avoid redundant stemmer computations across repeated words.
