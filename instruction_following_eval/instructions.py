@@ -1058,11 +1058,14 @@ class KeySentenceChecker(Instruction):
 
   def check_following(self, value):
     """Checks if the response contains the expected key sentences."""
-    count = 0
-    sentences = instructions_util.split_into_sentences(value)
-    for sentence in self._key_sentences:
-      if sentence in sentences:
-        count += 1
+    # Fast path check: skip sentence splitting if fewer than _num_sentences key
+    # sentences exist as substrings in value.
+    candidates = [s for s in self._key_sentences if s in value]
+    if len(candidates) < self._num_sentences:
+      return False
+
+    sentences = set(instructions_util.split_into_sentences(value))
+    count = sum(1 for sentence in candidates if sentence in sentences)
 
     return count == self._num_sentences
 
@@ -1092,6 +1095,16 @@ class ForbiddenWords(Instruction):
         "Do not include keywords {forbidden_words} in the response."
     )
 
+    # Pre-compile a single regex matching any forbidden word to optimize
+    # check_following.
+    if self._forbidden_words:
+      pattern = (
+          r"\b(" + "|".join(re.escape(w) for w in self._forbidden_words) + r")\b"
+      )
+      self._compiled_forbidden_regex = re.compile(pattern, flags=re.IGNORECASE)
+    else:
+      self._compiled_forbidden_regex = None
+
     return self._description_pattern.format(
         forbidden_words=self._forbidden_words
     )
@@ -1106,10 +1119,9 @@ class ForbiddenWords(Instruction):
 
   def check_following(self, value):
     """Check if the response does not contain the expected keywords."""
-    for word in self._forbidden_words:
-      if re.search(r"\b" + word + r"\b", value, flags=re.IGNORECASE):
-        return False
-    return True
+    if not self._compiled_forbidden_regex:
+      return True
+    return not self._compiled_forbidden_regex.search(value)
 
 
 class RephraseParagraph(Instruction):
@@ -1132,6 +1144,10 @@ class RephraseParagraph(Instruction):
     self._original_paragraph = original_paragraph
     self._low = low
     self._high = high
+
+    # Precompute word frequency for original_paragraph to avoid re-tokenizing in check_following.
+    original_words = re.findall(r"\w+", self._original_paragraph.lower())
+    self._dict_original = collections.Counter(original_words)
 
     self._description = ("Rephrase the following paragraph: " +
                          "{original_paragraph}\nYour response should have " +
@@ -1156,14 +1172,12 @@ class RephraseParagraph(Instruction):
 
   def check_following(self, value):
     val_words = re.findall(r"\w+", value.lower())
-    original_words = re.findall(r"\w+", self._original_paragraph.lower())
     similar_words = 0
 
     dict_val = collections.Counter(val_words)
-    dict_original = collections.Counter(original_words)
 
-    for word in dict_original:
-      similar_words += min(dict_original[word], dict_val[word])
+    for word, count in self._dict_original.items():
+      similar_words += min(count, dict_val[word])
 
     return similar_words >= self._low and similar_words <= self._high
 
@@ -1382,13 +1396,12 @@ class LetterFrequencyChecker(Instruction):
 
   def check_following(self, value):
     """Checks that the response contains the letter at the right frequency."""
-    value = value.lower()
-    letters = collections.Counter(value)
+    count = value.lower().count(self._letter)
 
     if self._comparison_relation == _COMPARISON_RELATION[0]:
-      return letters[self._letter] < self._frequency
+      return count < self._frequency
     else:
-      return letters[self._letter] >= self._frequency
+      return count >= self._frequency
 
 
 class CapitalLettersEnglishChecker(Instruction):
