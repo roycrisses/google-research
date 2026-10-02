@@ -159,7 +159,10 @@ class RougeScorer(scoring.BaseScorer):
           raise ValueError("rougen requires positive n: %s" % rouge_type)
         target_ngrams = _create_ngrams(target_tokens, n)
         prediction_ngrams = _create_ngrams(prediction_tokens, n)
-        scores = _score_ngrams(target_ngrams, prediction_ngrams)
+        target_ngrams_count = max(0, len(target_tokens) - n + 1)
+        prediction_ngrams_count = max(0, len(prediction_tokens) - n + 1)
+        scores = _score_ngrams(target_ngrams, prediction_ngrams,
+                               target_ngrams_count, prediction_ngrams_count)
       else:
         raise ValueError("Invalid rouge type: %s" % rouge_type)
       result[rouge_type] = scores
@@ -176,11 +179,9 @@ def _create_ngrams(tokens, n):
   Returns:
     A dictionary mapping each bigram to the number of occurrences.
   """
-
-  ngrams = collections.Counter()
-  for ngram in (tuple(tokens[i:i + n]) for i in range(len(tokens) - n + 1)):
-    ngrams[ngram] += 1
-  return ngrams
+  if len(tokens) < n:
+    return collections.Counter()
+  return collections.Counter(zip(*[tokens[i:] for i in range(n)]))
 
 
 def _score_lcs(target_tokens, prediction_tokens):
@@ -365,7 +366,8 @@ def lcs_ind(ref, can):
   return _backtrack_norec(t, ref, can)
 
 
-def _score_ngrams(target_ngrams, prediction_ngrams):
+def _score_ngrams(target_ngrams, prediction_ngrams,
+                  target_ngrams_count=None, prediction_ngrams_count=None):
   """Compute n-gram based rouge scores.
 
   Args:
@@ -373,16 +375,27 @@ def _score_ngrams(target_ngrams, prediction_ngrams):
       occurrences for the target text.
     prediction_ngrams: A Counter object mapping each ngram to number of
       occurrences for the prediction text.
+    target_ngrams_count: Optional total count of target ngrams.
+    prediction_ngrams_count: Optional total count of prediction ngrams.
   Returns:
     A Score object containing computed scores.
   """
+  if target_ngrams_count is None:
+    target_ngrams_count = sum(target_ngrams.values())
+  if prediction_ngrams_count is None:
+    prediction_ngrams_count = sum(prediction_ngrams.values())
 
   intersection_ngrams_count = 0
-  for ngram in six.iterkeys(target_ngrams):
-    intersection_ngrams_count += min(target_ngrams[ngram],
-                                     prediction_ngrams[ngram])
-  target_ngrams_count = sum(target_ngrams.values())
-  prediction_ngrams_count = sum(prediction_ngrams.values())
+  # Iterate over the smaller counter to minimize hash lookups
+  if len(target_ngrams) < len(prediction_ngrams):
+    small_ngrams, large_ngrams = target_ngrams, prediction_ngrams
+  else:
+    small_ngrams, large_ngrams = prediction_ngrams, target_ngrams
+
+  for ngram, count1 in small_ngrams.items():
+    if ngram in large_ngrams:
+      count2 = large_ngrams[ngram]
+      intersection_ngrams_count += count1 if count1 < count2 else count2
 
   precision = intersection_ngrams_count / max(prediction_ngrams_count, 1)
   recall = intersection_ngrams_count / max(target_ngrams_count, 1)
