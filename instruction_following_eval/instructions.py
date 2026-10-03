@@ -379,6 +379,9 @@ class ConstrainedStartChecker(Instruction):
     self._starter = starter.strip() if isinstance(starter, str) else starter
     if self._starter is None:
       self._starter = random.choice(_STARTER_OPTIONS)
+    self._starter_re = re.compile(
+        r"^\s*" + self._starter + r".*$", flags=re.MULTILINE
+    )
     self._description_pattern = (
         "During the conversation, when it is your turn, " +
         "please always start with {starter}")
@@ -402,10 +405,7 @@ class ConstrainedStartChecker(Instruction):
       True if the response starts with the given phrase or keyword that is
       contained in `instruction_args`; otherwise, False.
     """
-    response_pattern = r"^\s*" + self._starter + r".*$"
-    response_with_constrained_start = re.search(response_pattern, value,
-                                                flags=re.MULTILINE)
-    return True if response_with_constrained_start else False
+    return bool(self._starter_re.search(value))
 
 
 class HighlightSectionChecker(Instruction):
@@ -487,6 +487,9 @@ class SectionChecker(Instruction):
     if self._num_sections is None or self._num_sections < 0:
       self._num_sections = random.randint(1, _NUM_SECTIONS)
 
+    section_splitter_pattern = r"\s?" + self._section_spliter + r"\s?\d+\s?"
+    self._section_splitter_re = re.compile(section_splitter_pattern)
+
     self._description_pattern = (
         "Your response must have {num_sections} sections. Mark the beginning " +
         "of each section with {section_spliter} X, such as:\n" +
@@ -521,8 +524,7 @@ class SectionChecker(Instruction):
       True if the number of sections in the response is greater than or equal to
       the minimum number of sections; otherwise, False.
     """
-    section_splitter_patten = r"\s?" + self._section_spliter  + r"\s?\d+\s?"
-    sections = re.split(section_splitter_patten, value)
+    sections = self._section_splitter_re.split(value)
     num_sections = len(sections) - 1
     return num_sections >= self._num_sections
 
@@ -600,6 +602,14 @@ class PostscriptChecker(Instruction):
     if self._postscript_marker is None:
       self._postscript_marker = random.choice(_POSTSCRIPT_MARKER)
 
+    if self._postscript_marker == "P.P.S":
+      postscript_pattern = r"\s*p\.\s?p\.\s?s.*$"
+    elif self._postscript_marker == "P.S.":
+      postscript_pattern = r"\s*p\.\s?s\..*$"
+    else:
+      postscript_pattern = r"\s*" + self._postscript_marker.lower() + r".*$"
+    self._postscript_re = re.compile(postscript_pattern, flags=re.MULTILINE)
+
     self._description_pattern = (
         "At the end of your response, please explicitly add a postscript " +
         "starting with {postscript}")
@@ -626,14 +636,7 @@ class PostscriptChecker(Instruction):
       the keyword containing in the `instruction_args`; otherwise False.
     """
     value = value.lower()
-    if self._postscript_marker == "P.P.S":
-      postscript_pattern = r"\s*p\.\s?p\.\s?s.*$"
-    elif self._postscript_marker == "P.S.":
-      postscript_pattern = r"\s*p\.\s?s\..*$"
-    else:
-      postscript_pattern = r"\s*" + self._postscript_marker.lower() + r".*$"
-    postscript = re.findall(postscript_pattern, value, flags=re.MULTILINE)
-    return True if postscript else False
+    return bool(self._postscript_re.search(value))
 
 
 class RephraseChecker(Instruction):
@@ -780,6 +783,8 @@ class KeywordFrequencyChecker(Instruction):
     else:
       self._comparison_relation = relation
 
+    self._keyword_re = re.compile(self._keyword, flags=re.IGNORECASE)
+
     self._description_pattern = (
         "In your response, the word {keyword} should appear {relation} " +
         "{frequency} times.")
@@ -801,8 +806,7 @@ class KeywordFrequencyChecker(Instruction):
 
   def check_following(self, value):
     """Checks if the response contain the keyword with required frequency."""
-    actual_occurrences = len(re.findall(
-        self._keyword, value, flags=re.IGNORECASE))
+    actual_occurrences = len(self._keyword_re.findall(value))
 
     if self._comparison_relation == _COMPARISON_RELATION[0]:
       return actual_occurrences < self._frequency
@@ -1058,11 +1062,11 @@ class KeySentenceChecker(Instruction):
 
   def check_following(self, value):
     """Checks if the response contains the expected key sentences."""
-    count = 0
+    candidates = [s for s in self._key_sentences if s in value]
+    if len(candidates) < self._num_sentences:
+      return False
     sentences = instructions_util.split_into_sentences(value)
-    for sentence in self._key_sentences:
-      if sentence in sentences:
-        count += 1
+    count = sum(1 for s in candidates if s in sentences)
 
     return count == self._num_sentences
 
@@ -1088,6 +1092,13 @@ class ForbiddenWords(Instruction):
     else:
       self._forbidden_words = list(set(forbidden_words))
     self._forbidden_words = sorted(self._forbidden_words)
+
+    if self._forbidden_words:
+      pattern = r"\b(" + "|".join(re.escape(w) for w in self._forbidden_words) + r")\b"
+      self._forbidden_re = re.compile(pattern, flags=re.IGNORECASE)
+    else:
+      self._forbidden_re = None
+
     self._description_pattern = (
         "Do not include keywords {forbidden_words} in the response."
     )
@@ -1106,10 +1117,9 @@ class ForbiddenWords(Instruction):
 
   def check_following(self, value):
     """Check if the response does not contain the expected keywords."""
-    for word in self._forbidden_words:
-      if re.search(r"\b" + word + r"\b", value, flags=re.IGNORECASE):
-        return False
-    return True
+    if self._forbidden_re is None:
+      return True
+    return not bool(self._forbidden_re.search(value))
 
 
 class RephraseParagraph(Instruction):
@@ -1132,6 +1142,9 @@ class RephraseParagraph(Instruction):
     self._original_paragraph = original_paragraph
     self._low = low
     self._high = high
+
+    original_words = re.findall(r"\w+", self._original_paragraph.lower())
+    self._dict_original = collections.Counter(original_words)
 
     self._description = ("Rephrase the following paragraph: " +
                          "{original_paragraph}\nYour response should have " +
@@ -1156,16 +1169,14 @@ class RephraseParagraph(Instruction):
 
   def check_following(self, value):
     val_words = re.findall(r"\w+", value.lower())
-    original_words = re.findall(r"\w+", self._original_paragraph.lower())
-    similar_words = 0
-
     dict_val = collections.Counter(val_words)
-    dict_original = collections.Counter(original_words)
 
-    for word in dict_original:
-      similar_words += min(dict_original[word], dict_val[word])
+    similar_words = sum(
+        min(count, dict_val[word])
+        for word, count in self._dict_original.items()
+    )
 
-    return similar_words >= self._low and similar_words <= self._high
+    return self._low <= similar_words <= self._high
 
 
 class TwoResponsesChecker(Instruction):
@@ -1530,11 +1541,16 @@ class CapitalWordFrequencyChecker(Instruction):
 
   def check_following(self, value):
     """Checks the frequency of words with all capital letters."""
+    # Fast path: if total uppercase characters in value is less than self._frequency,
+    # and relation is 'at least', then capital words count cannot reach self._frequency.
+    if self._comparison_relation == _COMPARISON_RELATION[1] and self._frequency > 0:
+      upper_char_count = sum(1 for c in value if c.isupper())
+      if upper_char_count < self._frequency:
+        return False
+
     # Hyphenated words will count as one word
     words = instructions_util.nltk.word_tokenize(value)
-    capital_words = [word for word in words if word.isupper()]
-
-    capital_words = len(capital_words)
+    capital_words = sum(1 for word in words if word.isupper())
 
     if self._comparison_relation == _COMPARISON_RELATION[0]:
       return capital_words < self._frequency
