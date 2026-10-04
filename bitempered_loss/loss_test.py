@@ -32,6 +32,7 @@ class LossTest(tf.test.TestCase):
 
   def test_normalization(self):
     """Test the normalization constant."""
+    tf.random.set_seed(1234)
     activations = tf.random.normal(shape=[100, 50000])
     for t in [0.99, 1.01]:
       normalization_constants = loss.compute_normalization(
