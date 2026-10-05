@@ -54,9 +54,18 @@ def preprocess(x, axis):
   """
   dims = list(range(x.shape.rank))
   dims[-1], dims[axis] = dims[axis], dims[-1]
-  x_transposed = tf.transpose(x, dims)
+  # Skip tf.transpose if axis is already the last dimension (identity transposition).
+  x_transposed = tf.transpose(x, dims) if dims[axis] != dims[-1] else x
   x_flat = tf.reshape(x_transposed, (-1, tf.shape(x)[axis]))
   return x_flat, dims, tf.shape(x_transposed)
+
+
+def _is_identity_perm(transposition):
+  if isinstance(transposition, tf.Tensor):
+    if not tf.executing_eagerly():
+      return False
+    transposition = transposition.numpy()
+  return list(transposition) == list(range(len(transposition)))
 
 
 def postprocess(x, transposition, shape):
@@ -74,7 +83,11 @@ def postprocess(x, transposition, shape):
    A Tensor<float> that is similar in shape to the tensor before preprocessing.
   """
   shape = tf.concat([shape[:-1], tf.shape(x)[-1:]], axis=0)
-  return tf.transpose(tf.reshape(x, shape), transposition)
+  x_reshaped = tf.reshape(x, shape)
+  # Skip tf.transpose if transposition is identity permutation.
+  if _is_identity_perm(transposition):
+    return x_reshaped
+  return tf.transpose(x_reshaped, transposition)
 
 
 def softsort(x,
