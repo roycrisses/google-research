@@ -47,8 +47,9 @@ def sample_lp_ball(d, p):
     # with density proportional to x^(ca-1) * exp(-|x|^c) = exp(-|x|^p).
     gamma_samples = random_signs(stats.gengamma.rvs(a=1 / p, c=p, size=d))
   exponential_sample = np.random.exponential(scale=1)
+  # Bolt: Avoid np.power function call overhead by using exponentiation operator ** directly.
   return gamma_samples / (
-      np.sum(np.power(np.abs(gamma_samples), p)) + exponential_sample
+      np.sum(np.abs(gamma_samples) ** p) + exponential_sample
   ) ** (1 / p)
 
 

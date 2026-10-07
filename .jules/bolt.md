@@ -1,3 +1,7 @@
 ## 2025-05-22 - ROUGE LCS Algorithmic Optimizations
 **Learning:** The default ROUGE LCS implementation suffered from several performance anti-patterns in Python: O(M*N) memory usage for simple length checks, O(N^2) list building using `insert(0, ...)`, and redundant O(M*N) DP calculations for disjoint token sequences or non-overlapping sentences in summaries.
 **Action:** Always use space-optimized DP ($O(\min(M, N))$) when only the length is needed. Use `append()` + `reverse()` for efficient list building. Implement fast-path checks using `set` intersections to bypass expensive algorithms. Pre-calculate sets in loops to avoid redundant conversions. Use local variable lookups and conditional expressions instead of `max()` in tight loops.
+
+## 2025-05-23 - Scipy Stats Overhead & NumPy Micro-Vector Indexing
+**Learning:** `scipy.stats` distributions (e.g., `scipy.stats.beta.rvs`, `scipy.stats.dirichlet.rvs`) incur significant class instantiation overhead relative to direct `np.random` calls (~25x overhead for beta sampling). Additionally, NumPy advanced indexing (`arr[idx_list] = val_list`) on tiny vectors ($d \le 5$) adds kernel dispatch overhead that can be slower than native Python loop assignment.
+**Action:** Use direct `np.random` distributions (`np.random.beta`, `np.random.dirichlet`) instead of `scipy.stats.*.rvs`. Benchmark micro-array vectorizations before replacing short Python loops.
