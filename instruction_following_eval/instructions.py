@@ -90,6 +90,18 @@ _ALL_CAPITAL_WORD_FREQUENCY = 20
 _NUM_WORDS_LOWER_LIMIT = 100
 _NUM_WORDS_UPPER_LIMIT = 500
 
+# Pre-compiled regular expression patterns for performance optimization.
+_PLACEHOLDER_PATTERN = re.compile(r"\[.*?\]")
+_BULLET_PATTERN_1 = re.compile(r"^\s*\*[^\*].*$", flags=re.MULTILINE)
+_BULLET_PATTERN_2 = re.compile(r"^\s*-.*$", flags=re.MULTILINE)
+_HIGHLIGHT_PATTERN = re.compile(r"\*[^\n\*]*\*")
+_DOUBLE_HIGHLIGHT_PATTERN = re.compile(r"\*\*[^\n\*]*\*\*")
+_PARAGRAPH_SPLIT_PATTERN = re.compile(r"\s?\*\*\*\s?")
+_TITLE_PATTERN = re.compile(r"<<[^\n]+>>")
+
+# Cache for SectionChecker section splitter compiled regexes.
+_SECTION_SPLITTER_PATTERNS = {}
+
 
 class Instruction:
   """An instruction template."""
@@ -272,7 +284,8 @@ class PlaceholderChecker(Instruction):
       True if the actual number of placeholders in the response is greater than
       or equal to `num_placeholders`; otherwise, False.
     """
-    placeholders = re.findall(r"\[.*?\]", value)
+    # Use pre-compiled regex pattern for placeholder matching.
+    placeholders = _PLACEHOLDER_PATTERN.findall(value)
     num_placeholders = len(placeholders)
     return num_placeholders >= self._num_placeholders
 
@@ -320,8 +333,9 @@ class BulletListChecker(Instruction):
       True if the actual number of bullet lists in the response meets the
       requirement.
     """
-    bullet_lists = re.findall(r"^\s*\*[^\*].*$", value, flags=re.MULTILINE)
-    bullet_lists_2 = re.findall(r"^\s*-.*$", value, flags=re.MULTILINE)
+    # Use pre-compiled regex patterns for bullet list matching.
+    bullet_lists = _BULLET_PATTERN_1.findall(value)
+    bullet_lists_2 = _BULLET_PATTERN_2.findall(value)
     num_bullet_lists = len(bullet_lists) + len(bullet_lists_2)
     return num_bullet_lists == self._num_bullets
 
@@ -451,8 +465,9 @@ class HighlightSectionChecker(Instruction):
       *highlighed sections* meets the minimum requirement; otherwise False.
     """
     num_highlights = 0
-    highlights = re.findall(r"\*[^\n\*]*\*", value)
-    double_highlights = re.findall(r"\*\*[^\n\*]*\*\*", value)
+    # Use pre-compiled regex patterns for section highlight matching.
+    highlights = _HIGHLIGHT_PATTERN.findall(value)
+    double_highlights = _DOUBLE_HIGHLIGHT_PATTERN.findall(value)
     for highlight in highlights:
       if highlight.strip("*").strip():
         num_highlights += 1
@@ -521,8 +536,13 @@ class SectionChecker(Instruction):
       True if the number of sections in the response is greater than or equal to
       the minimum number of sections; otherwise, False.
     """
-    section_splitter_patten = r"\s?" + self._section_spliter  + r"\s?\d+\s?"
-    sections = re.split(section_splitter_patten, value)
+    # Cache section splitter regex compiled pattern.
+    if self._section_spliter not in _SECTION_SPLITTER_PATTERNS:
+      _SECTION_SPLITTER_PATTERNS[self._section_spliter] = re.compile(
+          r"\s?" + re.escape(self._section_spliter) + r"\s?\d+\s?"
+      )
+    pattern = _SECTION_SPLITTER_PATTERNS[self._section_spliter]
+    sections = pattern.split(value)
     num_sections = len(sections) - 1
     return num_sections >= self._num_sections
 
@@ -568,7 +588,8 @@ class ParagraphChecker(Instruction):
       True if the actual number of paragraphs is the same as required;
       otherwise, False.
     """
-    paragraphs = re.split(r"\s?\*\*\*\s?", value)
+    # Use pre-compiled regex pattern for splitting paragraphs.
+    paragraphs = _PARAGRAPH_SPLIT_PATTERN.split(value)
     num_paragraphs = len(paragraphs)
 
     for index, paragraph in enumerate(paragraphs):
@@ -1303,9 +1324,8 @@ class TitleChecker(Instruction):
 
   def check_following(self, value):
     """Checks if the response contains a title."""
-    pattern = r"<<[^\n]+>>"
-    re_pattern = re.compile(pattern)
-    titles = re.findall(re_pattern, value)
+    # Use pre-compiled regex pattern for title matching.
+    titles = _TITLE_PATTERN.findall(value)
 
     for title in titles:
       if title.lstrip("<").rstrip(">").strip():
