@@ -50,10 +50,12 @@ class SmoothStep(tf.keras.layers.Layer):
     self._a0 = 0.5
 
   def call(self, inputs):
+    # Optimize polynomial evaluation with Horner's method and scalar broadcasting
+    # in tf.where to avoid allocating temporary zeros_like and ones_like tensors.
+    poly = inputs * (self._a3 * tf.math.square(inputs) + self._a1) + self._a0
     return tf.where(
-        inputs <= self._lower_bound, tf.zeros_like(inputs),
-        tf.where(inputs >= self._upper_bound, tf.ones_like(inputs),
-                 self._a3 * (inputs**3) + self._a1 * inputs + self._a0))
+        inputs <= self._lower_bound, 0.0,
+        tf.where(inputs >= self._upper_bound, 1.0, poly))
 
 
 class EntropyRegularizer(tf.keras.layers.Layer):
@@ -79,7 +81,7 @@ class EntropyRegularizer(tf.keras.layers.Layer):
     self._schedule_fn = schedule_fn
 
   def call(self, inputs):
-    assign_op = self._num_calls.assign_add(1, read_value=False)
+    assign_op = self._num_calls.assign_add(1)
 
     preconditions = [] if assign_op is None else [assign_op]
     with tf.control_dependencies(preconditions):
@@ -192,10 +194,11 @@ class DSelectKGate(tf.keras.layers.Layer):
         list(np.binary_repr(val, width=self._num_binary))
         for val in range(num_experts)
     ]).astype(bool)
-    # A constant tensor = binary_matrix, with an additional dimension for
+    # A constant tensor = binary_matrix, with additional dimensions for
     # broadcasting.
     self._binary_codes = tf.expand_dims(
         tf.constant(binary_matrix, dtype=bool), axis=0)
+    self._binary_codes_expanded = tf.expand_dims(self._binary_codes, 0)
     self.built = True
 
   def call(self,
@@ -222,14 +225,14 @@ class DSelectKGate(tf.keras.layers.Layer):
       # Example-conditioned routing.
       expert_weights, selector_outputs = (
           self._compute_example_conditioned_expert_weights(routing_inputs))
-      output = tf.math.accumulate_n([
+      output = tf.math.add_n([
           tf.reshape(expert_weights[:, i], [-1, 1]) * experts[i]
           for i in range(len(experts))
       ])
     else:
       # Task-only routing.
       expert_weights, selector_outputs = self._compute_expert_weights()
-      output = tf.math.accumulate_n(
+      output = tf.math.add_n(
           [expert_weights[i] * experts[i] for i in range(len(experts))])
     if training:
       self._add_regularization_loss(selector_outputs)
@@ -284,8 +287,8 @@ class DSelectKGate(tf.keras.layers.Layer):
     # Shape = (batch_size, num_nonzeros, num_experts).
     selector_outputs = tf.math.reduce_prod(
         tf.where(
-            tf.expand_dims(self._binary_codes, 0), smooth_step_activations,
-            1 - smooth_step_activations), 3)
+            self._binary_codes_expanded, smooth_step_activations,
+            1.0 - smooth_step_activations), 3)
     # Weights for the single-expert selectors.
     # Shape = (batch_size, num_nonzeros, 1).
     selector_weights = tf.expand_dims(self._w_logits(routing_inputs), 2)

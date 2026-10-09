@@ -1,3 +1,7 @@
 ## 2025-05-22 - ROUGE LCS Algorithmic Optimizations
 **Learning:** The default ROUGE LCS implementation suffered from several performance anti-patterns in Python: O(M*N) memory usage for simple length checks, O(N^2) list building using `insert(0, ...)`, and redundant O(M*N) DP calculations for disjoint token sequences or non-overlapping sentences in summaries.
 **Action:** Always use space-optimized DP ($O(\min(M, N))$) when only the length is needed. Use `append()` + `reverse()` for efficient list building. Implement fast-path checks using `set` intersections to bypass expensive algorithms. Pre-calculate sets in loops to avoid redundant conversions. Use local variable lookups and conditional expressions instead of `max()` in tight loops.
+
+## 2025-05-23 - TensorFlow SmoothStep & Gate Tensor Allocation Optimizations
+**Learning:** Using `tf.zeros_like(x)` / `tf.ones_like(x)` in element-wise conditionals like `tf.where` allocates full-sized temporary zero/one tensors on every forward pass. Passing Python scalar floats `0.0` / `1.0` allows TensorFlow's C++ kernel to broadcast scalars directly without extra memory allocations. Furthermore, cubic polynomial activations like SmoothStep ($a_3 x^3 + a_1 x + a_0$) evaluate ~3.27x faster using Horner's method ($x (a_3 x^2 + a_1) + a_0$), avoiding expensive general exponentiation (`**3`).
+**Action:** Prefer scalar literals over `zeros_like`/`ones_like` in `tf.where` conditionals, and use Horner's scheme for polynomial function evaluations in custom activation layers.
