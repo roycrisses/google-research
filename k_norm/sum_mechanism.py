@@ -15,18 +15,14 @@
 
 """Induced norm sum mechanism."""
 
+import functools
 import numpy as np
-from scipy import stats
 
 from k_norm import lp_mechanism
 
 
-def compute_eulerian_numbers(d):
-  """Returns A where A[i, j] = Eulerian number A(i, j).
-
-  Args:
-    d: Integer such that the returned matrix has d+1 rows and columns.
-  """
+@functools.lru_cache(maxsize=None)
+def _compute_eulerian_numbers_cached(d):
   eulerian_numbers = np.zeros((d + 1, d + 1))
   eulerian_numbers[:, 0] = np.ones(d + 1)
   for row in range(2, d + 1):
@@ -35,6 +31,15 @@ def compute_eulerian_numbers(d):
           row - 1, k - 1
       ] + (k + 1) * eulerian_numbers[row - 1, k]
   return eulerian_numbers
+
+
+def compute_eulerian_numbers(d):
+  """Returns A where A[i, j] = Eulerian number A(i, j).
+
+  Args:
+    d: Integer such that the returned matrix has d+1 rows and columns.
+  """
+  return _compute_eulerian_numbers_cached(d).copy()
 
 
 def compute_add_ascent_indices(eulerian_numbers, k):
@@ -121,7 +126,7 @@ def sample_slice_index(eulerian_numbers, k):
   """
   slices = eulerian_numbers[-1, :k]
   weights = slices / np.sum(slices)
-  return np.random.choice(len(slices), 1, p=weights)[0]
+  return np.random.choice(len(slices), p=weights)
 
 
 def sample_fundamental_simplex(d):
@@ -130,14 +135,8 @@ def sample_fundamental_simplex(d):
   Args:
     d: Integer dimension of the fundamental simplex.
   """
-  convex_combination_weights = stats.dirichlet.rvs([1] * (d + 1))
-  fundamental_simplex_vertices = np.zeros((d + 1, d))
-  for i in range(1, d + 1):
-    fundamental_simplex_vertices[i - 1, -i:] = 1
-  return np.sum(
-      np.transpose(convex_combination_weights) * fundamental_simplex_vertices,
-      axis=0,
-  )
+  convex_combination_weights = np.random.dirichlet(np.ones(d + 1))
+  return np.cumsum(convex_combination_weights[d - 1::-1])
 
 
 def sample_sum_ball(eulerian_numbers, k):

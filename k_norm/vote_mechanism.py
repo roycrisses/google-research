@@ -15,9 +15,9 @@
 
 """Induced norm vote mechanism."""
 
+import functools
 import numpy as np
 from scipy import special
-from scipy import stats
 
 
 def sample_from_simplex(vertices):
@@ -30,7 +30,7 @@ def sample_from_simplex(vertices):
     Shape-(d,) ndarray for a single point sampled uniformly from the simplex.
   """
   d = len(vertices)
-  convex_combination_weights = stats.dirichlet.rvs([1] * d)[0]
+  convex_combination_weights = np.random.dirichlet(np.ones(d))
   return np.matmul(convex_combination_weights, vertices)
 
 
@@ -60,6 +60,7 @@ def external_to_internal_direct_sum(subpermutohedron_1, subpermutohedron_2,
   return embedded
 
 
+@functools.lru_cache(maxsize=None)
 def compute_face_class_weights(d):
   """Returns the face class weights associated with dimension d.
 
@@ -136,7 +137,7 @@ def sample_simplices_and_embedding(face_class_weights):
   """
   d = len(face_class_weights)
   subpermutohedron_1_size = (
-      np.random.choice(d - 1, 1, p=face_class_weights[1:])[0] + 1
+      np.random.choice(d - 1, p=face_class_weights[1:]) + 1
   )
   subpermutohedron_2_size = d - subpermutohedron_1_size
   random_permutation = np.random.permutation(d)
