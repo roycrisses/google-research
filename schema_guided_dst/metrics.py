@@ -82,11 +82,18 @@ def compute_f1(list_ref, list_hyp):
   Returns:
     A F1Scores object containing F1, precision, and recall scores.
   """
+  # Fast paths for empty inputs to avoid Counter instantiation and intersection.
+  if not list_ref and not list_hyp:
+    return F1Scores(f1=1.0, precision=1.0, recall=1.0)
+  if not list_ref:
+    return F1Scores(f1=0.0, precision=0.0, recall=1.0)
+  if not list_hyp:
+    return F1Scores(f1=0.0, precision=1.0, recall=0.0)
 
+  true = len(list_ref)
+  positive = len(list_hyp)
   ref = collections.Counter(list_ref)
   hyp = collections.Counter(list_hyp)
-  true = sum(ref.values())
-  positive = sum(hyp.values())
   true_positive = sum((ref & hyp).values())
   precision = float(true_positive) / positive if positive else 1.0
   recall = float(true_positive) / true if true else 1.0
@@ -118,11 +125,15 @@ def noncat_slot_value_match(str_ref_list, str_hyp, use_fuzzy_match):
   """
   score = 0.0
   for str_ref in str_ref_list:
-    if not use_fuzzy_match:
-      match_score = float(str_ref == str_hyp)
-    else:
+    # Exact match gives maximum score (1.0), short-circuiting fuzz.token_sort_ratio.
+    if str_ref == str_hyp:
+      return 1.0
+    if use_fuzzy_match:
       match_score = fuzzy_string_match(str_ref, str_hyp)
-    score = max(score, match_score)
+      if match_score > score:
+        score = match_score
+        if score >= 1.0:
+          return 1.0
   return score
 
 
@@ -162,7 +173,8 @@ def compare_slot_values(slot_values_ref, slot_values_hyp, service,
         value_ref_list = slot_values_ref[slot_name]
         value_hyp = slot_values_hyp[slot_name][0]
         if slot["is_categorical"]:
-          cor = float(value_ref_list[0].lower() == value_hyp.lower())
+          v_ref0 = value_ref_list[0]
+          cor = 1.0 if (v_ref0 == value_hyp or v_ref0.lower() == value_hyp.lower()) else 0.0
         else:
           cor = noncat_slot_value_match(value_ref_list, value_hyp,
                                         use_fuzzy_match)
@@ -211,20 +223,19 @@ def get_slot_tagging_f1(frame_ref, frame_hyp, utt, service):
   Returns:
     A F1Scores object containing F1, precision, and recall scores.
   """
-
-  list_noncat_slots = [
-      s["name"] for s in service["slots"] if not s["is_categorical"]
-  ]
   if "slots" not in frame_hyp:
     return None
-  else:
-    list_ref = [(s["slot"], utt[s["start"]:s["exclusive_end"]])
-                for s in frame_ref["slots"]
-                if s["slot"] in list_noncat_slots]
-    list_hyp = [(s["slot"], utt[s["start"]:s["exclusive_end"]])
-                for s in frame_hyp["slots"]
-                if s["slot"] in list_noncat_slots]
-    return compute_f1(list_ref, list_hyp)
+
+  noncat_slots = {
+      s["name"] for s in service["slots"] if not s["is_categorical"]
+  }
+  list_ref = [(s["slot"], utt[s["start"]:s["exclusive_end"]])
+              for s in frame_ref["slots"]
+              if s["slot"] in noncat_slots]
+  list_hyp = [(s["slot"], utt[s["start"]:s["exclusive_end"]])
+              for s in frame_hyp["slots"]
+              if s["slot"] in noncat_slots]
+  return compute_f1(list_ref, list_hyp)
 
 
 def get_requested_slots_f1(frame_ref, frame_hyp):
@@ -239,6 +250,23 @@ def get_requested_slots_f1(frame_ref, frame_hyp):
   """
   return compute_f1(frame_ref["state"]["requested_slots"],
                     frame_hyp["state"]["requested_slots"])
+
+
+def _mean(vals):
+  """Fast pure-Python average calculation on small lists."""
+  return float(sum(vals)) / len(vals) if vals else NAN_VAL
+
+
+def _prod(vals):
+  """Fast pure-Python product calculation with zero early-exit."""
+  if not vals:
+    return NAN_VAL
+  res = 1.0
+  for v in vals:
+    if v == 0.0:
+      return 0.0
+    res *= v
+  return res
 
 
 def get_average_and_joint_goal_accuracy(frame_ref, frame_hyp, service,
@@ -265,31 +293,31 @@ def get_average_and_joint_goal_accuracy(frame_ref, frame_hyp, service,
 
   # (4) Average goal accuracy.
   active_acc = [acc for acc, active in zip(list_acc, slot_active) if active]
-  goal_acc[AVERAGE_GOAL_ACCURACY] = np.mean(
-      active_acc) if active_acc else NAN_VAL
+  goal_acc[AVERAGE_GOAL_ACCURACY] = _mean(active_acc)
+
   # (4-a) categorical.
   active_cat_acc = [
       acc for acc, active, cat in zip(list_acc, slot_active, slot_cat)
       if active and cat
   ]
-  goal_acc[AVERAGE_CAT_ACCURACY] = (
-      np.mean(active_cat_acc) if active_cat_acc else NAN_VAL)
+  goal_acc[AVERAGE_CAT_ACCURACY] = _mean(active_cat_acc)
+
   # (4-b) non-categorical.
   active_noncat_acc = [
       acc for acc, active, cat in zip(list_acc, slot_active, slot_cat)
       if active and not cat
   ]
-  goal_acc[AVERAGE_NONCAT_ACCURACY] = (
-      np.mean(active_noncat_acc) if active_noncat_acc else NAN_VAL)
+  goal_acc[AVERAGE_NONCAT_ACCURACY] = _mean(active_noncat_acc)
 
   # (5) Joint goal accuracy.
-  goal_acc[JOINT_GOAL_ACCURACY] = np.prod(list_acc) if list_acc else NAN_VAL
+  goal_acc[JOINT_GOAL_ACCURACY] = _prod(list_acc)
+
   # (5-a) categorical.
   cat_acc = [acc for acc, cat in zip(list_acc, slot_cat) if cat]
-  goal_acc[JOINT_CAT_ACCURACY] = np.prod(cat_acc) if cat_acc else NAN_VAL
+  goal_acc[JOINT_CAT_ACCURACY] = _prod(cat_acc)
+
   # (5-b) non-categorical.
   noncat_acc = [acc for acc, cat in zip(list_acc, slot_cat) if not cat]
-  goal_acc[JOINT_NONCAT_ACCURACY] = np.prod(
-      noncat_acc) if noncat_acc else NAN_VAL
+  goal_acc[JOINT_NONCAT_ACCURACY] = _prod(noncat_acc)
 
   return goal_acc
