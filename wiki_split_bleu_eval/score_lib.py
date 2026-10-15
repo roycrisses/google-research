@@ -95,14 +95,16 @@ def ReadParcels(line_iterator,
 
   # Parse input lines to multi-analysis parcel lists.
   parceled_instances = []
-  for line in line_iterator:
-    analyses = line.strip().split('\t')
-    assert analyses
-    parceled_instances.append([SplitParcels(analysis) for analysis in analyses])
-
   if reduce_to_single_analysis:
-    assert all([len(analyses) == 1 for analyses in parceled_instances])
-    parceled_instances = [analyses[0] for analyses in parceled_instances]
+    for line in line_iterator:
+      analyses = line.strip().split('\t')
+      assert len(analyses) == 1
+      parceled_instances.append(SplitParcels(analyses[0]))
+  else:
+    for line in line_iterator:
+      analyses = line.strip().split('\t')
+      assert analyses
+      parceled_instances.append([SplitParcels(analysis) for analysis in analyses])
 
   return parceled_instances
 
@@ -183,23 +185,23 @@ def LengthStatistics(data):
 
   results = {}
 
-  # Average number of parcels per decomposed instance.
-  parcel_counts = [len(instance) for instance in data]
-  results['lengths.simple_per_complex'] = np.mean(parcel_counts)
+  # Single pass over data for parcel counts and token counts using pure Python
+  parcel_counts = []
+  token_means = []
+  total_tokens = 0
 
-  # Token counts.
-  token_counts = []
   for instance in data:
-    token_counts.append([NumTokens(parcel) for parcel in instance])
+    p_len = len(instance)
+    parcel_counts.append(p_len)
+    t_counts = [NumTokens(parcel) for parcel in instance]
+    total_tokens += sum(t_counts)
+    token_means.append(sum(t_counts) / p_len if p_len > 0 else np.nan)
 
-  # Macro averaged number of tokens per parcel.
-  results['lengths.tokens_per_simple'] = np.mean(
-      [np.mean(counts) for counts in token_counts])
-
-  # Micro averaged number of tokens per parcel.
-  total_tokens = np.sum(list(itertools.chain.from_iterable(token_counts)))
-  total_parcels = np.sum(parcel_counts)
-  results['lengths.tokens_per_simple_micro'] = total_tokens / total_parcels
+  results['lengths.simple_per_complex'] = np.mean(parcel_counts)
+  results['lengths.tokens_per_simple'] = np.mean(token_means)
+  total_parcels = sum(parcel_counts)
+  results['lengths.tokens_per_simple_micro'] = (
+      total_tokens / total_parcels if total_parcels > 0 else np.nan)
 
   return results
 
@@ -218,30 +220,22 @@ def GoldLengthStatistics(data):
 
   results = {}
 
-  # Macro-average number of parcels per decomposed instance.
-  parcel_counts = []
-  for instance in data:
-    parcel_counts.append([len(analysis) for analysis in instance])
+  # Single pass over data for parcel count averages and token count averages
+  parcel_means = []
+  token_means = []
 
-  results['ref_lengths.simple_per_complex'] = np.mean(
-      [np.mean(counts) for counts in parcel_counts])
-
-  # Token counts.
-  token_counts = []
   for instance in data:
-    instance_counts = []
+    p_counts = []
+    t_means = []
     for analysis in instance:
-      instance_counts.append([NumTokens(parcel) for parcel in analysis])
-    token_counts.append(instance_counts)
+      p_counts.append(len(analysis))
+      t_counts = [NumTokens(parcel) for parcel in analysis]
+      t_means.append(sum(t_counts) / len(t_counts) if t_counts else np.nan)
+    parcel_means.append(sum(p_counts) / len(p_counts) if p_counts else np.nan)
+    token_means.append(sum(t_means) / len(t_means) if t_means else np.nan)
 
-  # Macro averaged number of tokens per parcel.
-  token_means_per_analysis = []
-  for instance in token_counts:
-    token_means_per_analysis.append(
-        [np.mean(analysis_counts) for analysis_counts in instance])
-
-  results['ref_lengths.tokens_per_simple'] = np.mean(
-      [np.mean(counts) for counts in token_means_per_analysis])
+  results['ref_lengths.simple_per_complex'] = np.mean(parcel_means)
+  results['ref_lengths.tokens_per_simple'] = np.mean(token_means)
 
   return results
 
@@ -278,39 +272,37 @@ def PerformEval(gold, pred, debug=False):
 
   # Collapse each analysis from a list of parcels into a single string,
   # since that is what we calculate metrics over.
-  gold_decompositions = []
-  for gold_instance in gold:
-    gold_decompositions.append(
-        [' '.join(parcel_list) for parcel_list in gold_instance])
-
+  gold_decompositions = [
+      [' '.join(parcel_list) for parcel_list in gold_instance]
+      for gold_instance in gold
+  ]
   pred_decompositions = [' '.join(parcel_list) for parcel_list in pred]
+
   if debug:
     print(gold_decompositions[:2])
     print(pred_decompositions[:2])
 
-  # Number of unique references per input.
-  counts = [
-      len(set(instance_references))
-      for instance_references in gold_decompositions
-  ]
-  results['uniq_refs_per_input.avg'] = np.mean(counts)
-  results['uniq_refs_per_input.min'] = np.min(counts)
-  results['uniq_refs_per_input.max'] = np.max(counts)
+  # Compute reference counts and unique reference counts in a single pass
+  ref_counts = []
+  uniq_counts = []
+  for instance_references in gold_decompositions:
+    ref_counts.append(len(instance_references))
+    uniq_counts.append(len(set(instance_references)))
 
-  # Number of references per input.
-  counts = [
-      len(instance_references) for instance_references in gold_decompositions
-  ]
-  results['refs_per_input.avg'] = np.mean(counts)
-  results['refs_per_input.min'] = np.min(counts)
-  results['refs_per_input.max'] = np.max(counts)
+  results['uniq_refs_per_input.avg'] = np.mean(uniq_counts)
+  results['uniq_refs_per_input.min'] = min(uniq_counts)
+  results['uniq_refs_per_input.max'] = max(uniq_counts)
+
+  results['refs_per_input.avg'] = np.mean(ref_counts)
+  results['refs_per_input.min'] = min(ref_counts)
+  results['refs_per_input.max'] = max(ref_counts)
 
   # Number of items in input data.
   results['counts.pred_inputs'] = len(pred)
   results['counts.gold_inputs'] = len(gold)
 
   # Number of individual items in input data (across analyses)
-  results['counts.references'] = len(list(itertools.chain.from_iterable(gold)))
+  results['counts.references'] = sum(len(instance) for instance in gold)
   results['counts.predictions'] = len(pred)
 
   # Calculate scoring metrics.
