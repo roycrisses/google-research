@@ -5,3 +5,7 @@
 ## 2025-05-23 - Python Loop Reductions vs NumPy Overhead
 **Learning:** Calling `np.mean` thousands of times inside nested Python loops for tiny arrays (e.g. 1-5 elements) incurs severe C-extension dispatch and NumPy array creation overhead (~10–15 µs per call). In pure Python, `sum(lst) / len(lst)` is ~100x faster per calculation (~0.1 µs).
 **Action:** Use pure Python reductions (`sum(...) / len(...)`) inside tight loops over small Python lists, and only convert to NumPy / call `np.mean` once on the aggregated outer list of results.
+
+## 2025-05-24 - SciPy Distribution Wrappers vs Direct Special/NumPy Functions
+**Learning:** `scipy.stats.norm` and `scipy.stats.beta` distribution class instances introduce substantial function call and parameter validation overhead (~2x to ~17x) compared to direct C-level `scipy.special` (`ndtr`, `ndtri`, `log_ndtr`) and `numpy.random` (`normal`, `beta`) functions when processing large arrays ($N \ge 100\text{k}$).
+**Action:** In high-throughput numerical sampling and accounting loops, replace `scipy.stats.norm.ppf(q, scale)` with `special.ndtri(q) * scale` and `scipy.stats.beta.rvs` with `np.random.beta`. Re-use pre-sampled Monte Carlo distributions across independent quantile/loss threshold evaluations.
