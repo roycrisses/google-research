@@ -315,17 +315,16 @@ def _produce_next_masks(current_mask):
 
   next_masks_idxs = np.transpose(np.nonzero(current_mask))
 
-  if next_masks_idxs.size == 0:
+  n = next_masks_idxs.shape[0]
+  if n == 0:
     next_masks = np.array([])
     next_masks_idxs = np.array([])
   else:
-    next_masks = np.repeat(
-        np.expand_dims(current_mask, axis=0),
-        next_masks_idxs.shape[0],
-        axis=0,
-    )
-    next_masks[_transform_next_masks_index_array_into_tuple(
-        next_masks_idxs)] = False
+    # Efficiently construct a batch of masks and set the unmasked position to False.
+    next_masks = np.repeat(current_mask[None, ...], n, axis=0)
+    rows = np.arange(n)
+    cols = tuple(next_masks_idxs.T)
+    next_masks[(rows,) + cols] = False
 
   return next_masks, next_masks_idxs
 
@@ -358,7 +357,7 @@ def produce_masked_inputs(input_to_mask, fully_masked_input, batch_of_masks):
   batch_of_masks = np.asarray(batch_of_masks)
 
   # Check that batch_of_masks includes batch dimension.
-  if len(batch_of_masks.shape) != len(input_to_mask.shape) + 1:
+  if batch_of_masks.ndim != input_to_mask.ndim + 1:
     raise TypeError('batch_of_masks must include batch dimension.')
 
   return np.where(batch_of_masks, input_to_mask, fully_masked_input)
@@ -399,6 +398,10 @@ def _backselect(f, current_input, current_mask, fully_masked_input):
       empty list.
   """
   backselect_stack = []  # List of (idx, value) tuples during backselect.
+  current_input = np.asarray(current_input)
+  current_mask = np.asarray(current_mask)
+  fully_masked_input = np.asarray(fully_masked_input)
+
   next_masks, next_masks_idxs = _produce_next_masks(current_mask)
 
   while next_masks_idxs.size > 0:
