@@ -46,18 +46,43 @@ def eval_schebyt(n, x, low,
     return jnp.ones_like(x)
   elif n == 1:
     return jnp.ones_like(x) - 2 * x / (high + low)
+
+  # Performance optimization: Replace O(n^2) recursive evaluation and repeated
+  # Chebyshev polynomial evaluations with a single O(n) bottom-up pass.
+  x_arr = jnp.asarray(x)
   s_0 = - (high + low) / (high - low)
-  if n == 2:
-    alpha = 1.
-    xi = 0.
+  s_x = 2 * x_arr / (high - low) + s_0
+  s_0_arr = jnp.asarray(s_0, dtype=s_x.dtype)
+
+  # Iteratively evaluate Chebyshev polynomials T_k at s_0 and s_x up to degree n
+  t_s0 = [jnp.ones_like(s_x), s_0_arr]
+  for k in range(2, n + 1):
+    t_s0.append(2.0 * s_0_arr * t_s0[-1] - t_s0[-2])
+
+  t_sx = [jnp.ones_like(s_x), s_x]
+  for k in range(2, n + 1):
+    t_sx.append(2.0 * s_x * t_sx[-1] - t_sx[-2])
+
+  # Compute Sobolev-Chebyshev polynomials S_k bottom-up for degrees k <= n
+  start_k = 0 if n % 2 == 0 else 1
+  if start_k == 0:
+    s_prev = jnp.ones_like(x_arr)
   else:
-    xi = chebyshev.eval_chebyt(n - 2, s_0) / chebyshev.eval_chebyt(n, s_0)
-    xi *= n / (n - 2)
-    gamma_n = -xi / (1 + 2 * (n - 2) * (n - 2) * n)
-    alpha = 1 / (1 - xi - gamma_n)
-  s_x = 2 * x / (high - low) + s_0
-  P_n = chebyshev.eval_chebyt(n, s_x) / chebyshev.eval_chebyt(n, s_0)
-  P_n2 = chebyshev.eval_chebyt(n - 2, s_x) / chebyshev.eval_chebyt(n - 2, s_0)
-  beta = (1 - alpha + xi * alpha)
-  S_n2 = eval_schebyt(n - 2, x, low, high)
-  return beta * S_n2 + alpha * P_n - xi * alpha * P_n2
+    s_prev = jnp.ones_like(x_arr) - 2 * x_arr / (high + low)
+
+  for k in range(start_k + 2, n + 1, 2):
+    if k == 2:
+      alpha = 1.0
+      xi = 0.0
+    else:
+      xi = (t_s0[k - 2] / t_s0[k]) * (k / (k - 2))
+      gamma_k = -xi / (1.0 + 2.0 * (k - 2) * (k - 2) * k)
+      alpha = 1.0 / (1.0 - xi - gamma_k)
+
+    p_k = t_sx[k] / t_s0[k]
+    p_k2 = t_sx[k - 2] / t_s0[k - 2]
+    beta = 1.0 - alpha + xi * alpha
+    s_curr = beta * s_prev + alpha * p_k - xi * alpha * p_k2
+    s_prev = s_curr
+
+  return s_prev
