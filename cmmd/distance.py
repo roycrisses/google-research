@@ -51,9 +51,10 @@ def mmd(x, y):
   x = jnp.asarray(x)
   y = jnp.asarray(y)
 
-  # jnp.matmul(x, x.T) etc. are not cached to avoid OOM when x has many rows.
-  x_sqnorms = jnp.diag(jnp.matmul(x, x.T))
-  y_sqnorms = jnp.diag(jnp.matmul(y, y.T))
+  # Compute squared row norms directly in O(N*D) time and O(N) memory
+  # instead of allocating an O(N^2) matmul matrix just to extract the diagonal.
+  x_sqnorms = jnp.sum(jnp.square(x), axis=-1)
+  y_sqnorms = jnp.sum(jnp.square(y), axis=-1)
 
   gamma = 1 / (2 * _SIGMA**2)
   k_xx = jnp.mean(
