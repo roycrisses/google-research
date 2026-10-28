@@ -275,11 +275,12 @@ def _transform_next_masks_index_array_into_tuple(idx_array):
   Raises:
     TypeError if idx_array is not 2-dimensional.
   """
-  if len(idx_array.shape) != 2:
+  idx_array = np.asarray(idx_array)
+  if idx_array.ndim != 2:
     raise TypeError('idx_array must be 2-dimensional.')
 
-  return _transform_index_array_into_indexer(
-      np.hstack((np.expand_dims(np.arange(idx_array.shape[0]), 1), idx_array)))
+  # Optimized direct indexer tuple creation avoiding np.hstack and np.expand_dims
+  return (np.arange(idx_array.shape[0]),) + tuple(idx_array.T)
 
 
 def _produce_next_masks(current_mask):
@@ -319,13 +320,15 @@ def _produce_next_masks(current_mask):
     next_masks = np.array([])
     next_masks_idxs = np.array([])
   else:
+    n = next_masks_idxs.shape[0]
+    # Optimized mask repeat using basic slicing current_mask[None, ...]
     next_masks = np.repeat(
-        np.expand_dims(current_mask, axis=0),
-        next_masks_idxs.shape[0],
+        current_mask[None, ...],
+        n,
         axis=0,
     )
-    next_masks[_transform_next_masks_index_array_into_tuple(
-        next_masks_idxs)] = False
+    # Direct indexer tuple avoids extra array concatenation
+    next_masks[(np.arange(n),) + tuple(next_masks_idxs.T)] = False
 
   return next_masks, next_masks_idxs
 
@@ -358,7 +361,7 @@ def produce_masked_inputs(input_to_mask, fully_masked_input, batch_of_masks):
   batch_of_masks = np.asarray(batch_of_masks)
 
   # Check that batch_of_masks includes batch dimension.
-  if len(batch_of_masks.shape) != len(input_to_mask.shape) + 1:
+  if batch_of_masks.ndim != input_to_mask.ndim + 1:
     raise TypeError('batch_of_masks must include batch dimension.')
 
   return np.where(batch_of_masks, input_to_mask, fully_masked_input)
@@ -398,6 +401,10 @@ def _backselect(f, current_input, current_mask, fully_masked_input):
     If there are no more positions that can be masked from current_mask, returns
       empty list.
   """
+  current_input = np.asarray(current_input)
+  current_mask = np.asarray(current_mask)
+  fully_masked_input = np.asarray(fully_masked_input)
+
   backselect_stack = []  # List of (idx, value) tuples during backselect.
   next_masks, next_masks_idxs = _produce_next_masks(current_mask)
 
@@ -512,7 +519,8 @@ def find_sis(f, threshold, current_input, current_mask, fully_masked_input):
   current_mask = np.asarray(current_mask)
   fully_masked_input = np.asarray(fully_masked_input)
 
-  starting_prediction = f(np.asarray([current_input]))
+  # Slicing creates 1-batch view without array allocation overhead
+  starting_prediction = f(current_input[None, ...])
 
   if starting_prediction < threshold:
     return None
@@ -530,7 +538,7 @@ def find_sis(f, threshold, current_input, current_mask, fully_masked_input):
       *backselect_stack)
 
   # Create mask that selects only SIS elements
-  mask = ~(make_empty_boolean_mask(current_mask.shape))
+  mask = np.zeros(current_mask.shape, dtype=bool)
   mask[_transform_index_array_into_indexer(sis_idxs)] = True
 
   sis_result = SISResult(
@@ -607,9 +615,8 @@ def sis_collection(f,
       break
     else:
       all_sis.append(sis_result)
-      current_input = np.copy(
-          produce_masked_inputs(current_input, fully_masked_input,
-                                np.asarray([~sis_result.mask]))[0])
+      current_input = produce_masked_inputs(
+          current_input, fully_masked_input, np.asarray([~sis_result.mask]))[0]
       # Update mask by AND with NOT SIS mask.
       current_mask = np.logical_and(current_mask, ~sis_result.mask)
 
