@@ -31,6 +31,15 @@ class TokenizeTest(absltest.TestCase):
     self.assertEqual(['one', 'two', 'three'],
                      tokenize.tokenize('one\n Two \nthree', None))
 
+  def test_stemmer_and_caching(self):
+    from nltk.stem import porter
+    stemmer = porter.PorterStemmer()
+    self.assertEqual(
+        ['jump', 'over', 'the', 'lazi', 'dog', 'and', 'jump'],
+        tokenize.tokenize('jumping over the lazy dog and jumping', stemmer))
+    self.assertIn('jumping', getattr(stemmer, '_stem_cache', {}))
+    self.assertEqual(stemmer._stem_cache['jumping'], 'jump')
+
 
 if __name__ == '__main__':
   absltest.main()

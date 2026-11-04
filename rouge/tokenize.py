@@ -23,13 +23,18 @@ import re
 import six
 
 
-# Pre-compile regexes that are use often
+# Pre-compile regexes that are used often
 NON_ALPHANUM_PATTERN = r"[^a-z0-9]+"
 NON_ALPHANUM_RE = re.compile(NON_ALPHANUM_PATTERN)
 SPACES_PATTERN = r"\s+"
 SPACES_RE = re.compile(SPACES_PATTERN)
 VALID_TOKEN_PATTERN = r"^[a-z0-9]+$"
 VALID_TOKEN_RE = re.compile(VALID_TOKEN_PATTERN)
+
+# Optimization: Directly extract alphanumeric tokens in a single regex pass.
+# This eliminates regex substitution (`sub`), whitespace splitting (`split`),
+# and post-filtering passes over empty/invalid tokens.
+_ALPHA_NUM_RE = re.compile(r"[a-z0-9]+")
 
 
 def tokenize(text, stemmer):
@@ -46,18 +51,29 @@ def tokenize(text, stemmer):
     A list of string tokens extracted from input text.
   """
 
-  # Convert everything to lowercase.
-  text = text.lower()
-  # Replace any non-alpha-numeric characters with spaces.
-  text = NON_ALPHANUM_RE.sub(" ", six.ensure_str(text))
+  # Convert everything to lowercase and extract alphanumeric tokens.
+  text = six.ensure_str(text).lower()
+  tokens = _ALPHA_NUM_RE.findall(text)
 
-  tokens = SPACES_RE.split(text)
   if stemmer:
-    # Only stem words more than 3 characters long.
-    tokens = [six.ensure_str(stemmer.stem(x)) if len(x) > 3 else x
-              for x in tokens]
+    # Optimization: Cache stem results on the stemmer instance to avoid
+    # recomputing expensive Porter stemmer rule checks for repetitive words.
+    stem_cache = getattr(stemmer, "_stem_cache", None)
+    if stem_cache is None:
+      stem_cache = {}
+      stemmer._stem_cache = stem_cache
 
-  # One final check to drop any empty or invalid tokens.
-  tokens = [x for x in tokens if VALID_TOKEN_RE.match(x)]
+    stemmed_tokens = []
+    for x in tokens:
+      if len(x) > 3:
+        # Only stem words more than 3 characters long.
+        stemmed = stem_cache.get(x)
+        if stemmed is None:
+          stemmed = six.ensure_str(stemmer.stem(x))
+          stem_cache[x] = stemmed
+        stemmed_tokens.append(stemmed)
+      else:
+        stemmed_tokens.append(x)
+    return stemmed_tokens
 
   return tokens
