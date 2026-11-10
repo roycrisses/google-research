@@ -216,8 +216,7 @@ def _lcs_table(ref, can):
   cols = len(can)
   lcs_table = [[0] * (cols + 1) for _ in range(rows + 1)]
   can_set = set(can)
-  for i in range(1, rows + 1):
-    ref_i = ref[i - 1]
+  for i, ref_i in enumerate(ref, 1):
     row_prev = lcs_table[i - 1]
     if ref_i not in can_set:
       # Fast-path: if current ref token is not in candidate set, we can skip the
@@ -225,13 +224,17 @@ def _lcs_table(ref, can):
       lcs_table[i] = row_prev
       continue
     row_i = lcs_table[i]
-    for j in range(1, cols + 1):
-      if ref_i == can[j - 1]:
-        row_i[j] = row_prev[j - 1] + 1
+    # Bolt optimization: Hoist row_i[j - 1] into a scalar register variable `curr_j`
+    # and directly enumerate `can` to avoid repeated list lookups in inner loop.
+    curr_j = 0
+    for j, can_j in enumerate(can, 1):
+      if ref_i == can_j:
+        curr_j = row_prev[j - 1] + 1
       else:
         v1 = row_prev[j]
-        v2 = row_i[j - 1]
-        row_i[j] = v1 if v1 >= v2 else v2
+        if v1 > curr_j:
+          curr_j = v1
+      row_i[j] = curr_j
   return lcs_table
 
 
@@ -240,7 +243,6 @@ def _lcs_length(ref, can):
   if len(ref) < len(can):
     ref, can = can, ref
 
-  rows = len(ref)
   cols = len(can)
   # prev_row[j] is lcs_table[i-1][j]
   # curr_row[j] is lcs_table[i][j]
@@ -248,21 +250,22 @@ def _lcs_length(ref, can):
   curr_row = [0] * (cols + 1)
 
   can_set = set(can)
-  for i in range(1, rows + 1):
-    ref_i = ref[i - 1]
+  for ref_i in ref:
     if ref_i not in can_set:
-      # Fast-path: if current ref token is not in candidate set, we can copy previous
-      # row directly and skip the inner loop.
-      curr_row[:] = prev_row
-      prev_row, curr_row = curr_row, prev_row
+      # Fast-path: if current ref token is not in candidate set, prev_row already
+      # contains the latest LCS values for this step. We can simply skip the inner loop.
       continue
-    for j in range(1, cols + 1):
-      if ref_i == can[j - 1]:
-        curr_row[j] = prev_row[j - 1] + 1
+    # Bolt optimization: Hoist curr_row[j - 1] into a scalar register variable `curr_j`
+    # and directly iterate `can` to avoid index math and repeated list lookups.
+    curr_j = 0
+    for j, can_j in enumerate(can, 1):
+      if ref_i == can_j:
+        curr_j = prev_row[j - 1] + 1
       else:
         v1 = prev_row[j]
-        v2 = curr_row[j - 1]
-        curr_row[j] = v1 if v1 >= v2 else v2
+        if v1 > curr_j:
+          curr_j = v1
+      curr_row[j] = curr_j
     prev_row, curr_row = curr_row, prev_row
 
   return prev_row[cols]
