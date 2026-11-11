@@ -144,13 +144,15 @@ class BootstrapAggregator(object):
       confidence interval on the mean).
     """
 
-    # Matrix of (bootstrap sample, measure).
-    sample_mean = np.zeros((self._n_samples, matrix.shape[1]))
-    for i in range(self._n_samples):
-      sample_idx = np.random.choice(
-          np.arange(matrix.shape[0]), size=matrix.shape[0])
-      sample = matrix[sample_idx, :]
-      sample_mean[i, :] = np.mean(sample, axis=0)
+    # Vectorized bootstrap resampling:
+    # Generate all bootstrap sample indices in a single C-level operation of
+    # shape (n_samples, n_items). This eliminates 1000 Python loop iterations,
+    # redundant `np.arange()` allocations, and per-iteration indexing while
+    # maintaining exact RNG stream equivalence with individual random choices.
+    sample_indices = np.random.choice(
+        matrix.shape[0], size=(self._n_samples, matrix.shape[0]))
+    # Compute mean across items (axis=1) for all bootstrap samples vectorized.
+    sample_mean = np.mean(matrix[sample_indices], axis=1)
 
     # Take percentiles on the estimate of the mean using bootstrap samples.
     # Final result is a (bounds, measure) matrix.
